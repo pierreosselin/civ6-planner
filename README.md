@@ -34,6 +34,45 @@ python3 -m civ6_planner dump -o map.json --csv tiles.csv
 python3 -m civ6_planner install-mod   # copy mod/mapdump into the game's Mods folder
 ```
 
+## Developing without the game
+
+`view` writes a standalone HTML page of a map: terrain, hills, mountains, features,
+resources (by class), rivers, borders, and the planner's tacks. Drag to pan, scroll to
+zoom, hover for a tile's fields.
+
+```bash
+python3 -m civ6_planner view --plan --open                 # newest save, with the plan
+python3 -m civ6_planner view --map earth1 --plan --open    # a test map from data/maps
+```
+
+Every command that reads a map (`plan`, `view`) takes `--map NAME|FILE` instead of
+the newest save, and `--mask` to hide all but part of it, so the planner can be tried
+on more or less of a map:
+
+```bash
+python3 -m civ6_planner view --map earth1 --mask blob --size 80 --mask-seed 3 --plan --open
+python3 -m civ6_planner plan --map earth1 --mask radius --size 6 --centre 30 20 --dry-run
+```
+
+- `blob`: `--size` tiles grown at random from the centre, like an explored area.
+- `radius`: every tile within `--size` of the centre.
+- `revealed`: exactly what the player had revealed when the map was captured.
+- `--centre X Y` (default: random land), `--mask-seed N` (repeatable masks),
+  `--resources visible` (drop resources the player's techs didn't show).
+
+In the page, "Show hidden tiles" draws the masked-out part of the map faded.
+
+### Test maps (`data/maps/`)
+
+Fully revealed maps from real games, captured once:
+
+1. In game (any game you don't mind seeing in full), press **Ctrl+Shift+F**. A status
+   message confirms how many tiles were captured.
+2. Save the game.
+3. `python3 -m civ6_planner dump --full -o data/maps/NAME.json`
+
+Each tile keeps `revealed` and `resource_visible` from the moment of capture.
+
 Tests: `python3 -m unittest discover -s tests` (or VS Code's Testing panel).
 
 ## In game
@@ -41,6 +80,8 @@ Tests: `python3 -m unittest discover -s tests` (or VS Code's Testing panel).
 - **Ctrl+Shift+T** re-reads the plan file and places its tacks, with the result shown
   as a status message ("Map Dump: tacks placed 2, removed 2, …"). This works mid-game;
   no reload needed.
+- **Ctrl+Shift+F** captures the whole map, fog ignored, into the next save (for test
+  maps; see above).
 - The planner's tacks are named `[MD] …`. Only those are ever moved or removed; a tile
   holding one of your own tacks is skipped.
 - Loading a save also places the current plan. Detailed Map Tacks, if enabled, shows
@@ -55,6 +96,9 @@ Tests: `python3 -m unittest discover -s tests` (or VS Code's Testing panel).
 | `src/civ6_planner/rules.py` | placement rules, read from `Cache/DebugGameplay.sqlite` where possible |
 | `src/civ6_planner/planner.py` | the placement decisions; the optimiser goes here |
 | `src/civ6_planner/tacks.py` | writes the plan the mod reads |
+| `src/civ6_planner/dataset.py` | test maps and masking them into partial scenarios |
+| `src/civ6_planner/viewer.py` | the HTML map view |
+| `data/maps/` | fully revealed test maps |
 | `mod/mapdump/` | the Civ VI mod (Lua); install with `install-mod` |
 
 ## Notes on the native Linux (Aspyr) port

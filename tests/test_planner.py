@@ -4,7 +4,7 @@ import tempfile
 import unittest
 import zlib
 
-from civ6_planner import dump, planner
+from civ6_planner import dataset, dump, planner
 from civ6_planner.gamemap import GameMap
 from civ6_planner.rules import Rules
 
@@ -95,6 +95,41 @@ class CampusTest(unittest.TestCase):
                     if 0 < gmap.distance(city, n) <= 3}
         self.assertGreater(len(picks), 1)
         self.assertTrue(picks <= expected, picks - expected)
+
+
+class MaskTest(unittest.TestCase):
+    def full(self):
+        gmap = full_map({(5, 5): {"water": 1}, (6, 6): {"resource": "RESOURCE_IRON", "resource_visible": 0}})
+        return {"w": W, "h": H, "turn": 1, "player": 0, "tiles": list(gmap), "cities": []}
+
+    def test_blob_is_connected_and_sized(self):
+        full = self.full()
+        scenario = dataset.mask(full, "blob", size=30, centre=(10, 6), seed=1)
+        gmap = GameMap(scenario)
+        self.assertEqual(len(gmap), 30)
+        seen, todo = set(), [gmap.tiles[(10, 6)]]
+        while todo:
+            t = todo.pop()
+            if t["i"] not in seen:
+                seen.add(t["i"])
+                todo += gmap.neighbours(t)
+        self.assertEqual(len(seen), 30)
+
+    def test_blob_is_repeatable_per_seed(self):
+        full = self.full()
+        a = {t["i"] for t in dataset.mask(full, "blob", 25, seed=7)["tiles"]}
+        b = {t["i"] for t in dataset.mask(full, "blob", 25, seed=7)["tiles"]}
+        c = {t["i"] for t in dataset.mask(full, "blob", 25, seed=8)["tiles"]}
+        self.assertEqual(a, b)
+        self.assertNotEqual(a, c)
+
+    def test_radius_and_resources(self):
+        full = self.full()
+        scenario = dataset.mask(full, "radius", 2, centre=(6, 6), resources="visible")
+        self.assertEqual(len(scenario["tiles"]), 19)
+        iron = [t for t in scenario["tiles"] if (t["x"], t["y"]) == (6, 6)][0]
+        self.assertEqual(iron["resource"], "NONE")
+        self.assertEqual(full["tiles"][6 * W + 6]["resource"], "RESOURCE_IRON")  # source untouched
 
 
 class SaveParsingTest(unittest.TestCase):

@@ -55,7 +55,10 @@ local function SetStatus(text)
 	pcall(function() Controls.Status:SetText("[MapDump] " .. text) end)
 end
 
-local function DumpMap()
+-- full=false: tiles revealed to the player, resources only where their techs show them.
+-- full=true: every plot and every resource, with revealed/resource_visible flags; for
+-- building test datasets from finished or throwaway games, not for play.
+local function DumpMap(full)
 	lines = {}
 	local playerID = Game.GetLocalPlayer()
 	if playerID == nil or playerID < 0 then return nil end
@@ -79,6 +82,7 @@ local function DumpMap()
 		"player=" .. playerID,
 		"w=" .. w,
 		"h=" .. h,
+		"scope=" .. (full and "full" or "revealed"),
 	})
 
 	local tileCount = 0
@@ -86,16 +90,18 @@ local function DumpMap()
 		local plot = Map.GetPlotByIndex(i)
 		local x, y = -1, -1
 		if plot ~= nil then x, y = plot:GetX(), plot:GetY() end
-		if plot ~= nil and vis:IsRevealed(x, y) then
+		local revealed = plot ~= nil and vis:IsRevealed(x, y)
+		if plot ~= nil and (full or revealed) then
 			tileCount = tileCount + 1
 
-			-- Only report resources the player's techs let them see.
+			-- Only report resources the player's techs let them see, unless full.
 			local resIndex = plot:GetResourceType()
-			local resource = "NONE"
+			local resource, resourceVisible = "NONE", false
 			if resIndex >= 0 then
 				local resRow = GameInfo.Resources[resIndex]
-				if resRow ~= nil and Call(playerResources, "IsResourceVisible", resRow.Hash) then
-					resource = resRow.ResourceType
+				if resRow ~= nil then
+					resourceVisible = Call(playerResources, "IsResourceVisible", resRow.Hash) and true or false
+					if full or resourceVisible then resource = resRow.ResourceType end
 				end
 			end
 
@@ -118,11 +124,13 @@ local function DumpMap()
 				"i=" .. i,
 				"x=" .. x,
 				"y=" .. y,
+				"revealed=" .. Bool(revealed),
 				"visible=" .. Bool(vis:IsVisible(x, y)),
 				"terrain=" .. TypeName(GameInfo.Terrains, plot:GetTerrainType(), "TerrainType"),
 				"feature=" .. TypeName(GameInfo.Features, plot:GetFeatureType(), "FeatureType"),
 				"resource=" .. resource,
 				"resource_count=" .. (resource ~= "NONE" and (Call(plot, "GetResourceCount") or 0) or 0),
+				"resource_visible=" .. Bool(resourceVisible),
 				"improvement=" .. TypeName(GameInfo.Improvements, plot:GetImprovementType(), "ImprovementType"),
 				"pillaged=" .. Bool(Call(plot, "IsImprovementPillaged")),
 				"district=" .. TypeName(GameInfo.Districts, plot:GetDistrictType(), "DistrictType"),
@@ -176,7 +184,7 @@ end
 -- in the game configuration, so the next save contains it. With toClipboard, also
 -- copies it to the system clipboard.
 function MapDump_SafeDump(toClipboard)
-	local ok, result, tileCount = pcall(DumpMap)
+	local ok, result, tileCount = pcall(DumpMap, false)
 	if not ok then
 		print(PREFIX .. "ERROR|msg=" .. tostring(result))
 		MapDump_SetConfig("MAPDUMP_STATUS", PREFIX .. "ERROR|msg=" .. tostring(result) .. "\n")
@@ -208,6 +216,16 @@ function MapDump_SafeDump(toClipboard)
 	SetStatus(status)
 end
 
+-- Dumps the whole map (fog ignored) into the game configuration under its own key, so
+-- the next save carries it alongside the regular dump. Returns a one-line summary.
+function MapDump_CaptureFull()
+	local ok, result, tileCount = pcall(DumpMap, true)
+	if not ok then return "error: " .. tostring(result) end
+	if result == nil then return "no local player" end
+	local stored, err = MapDump_SetConfig("MAPDUMP_FULL", table.concat(result, "\n") .. "\n")
+	if not stored then return "config failed: " .. tostring(err) end
+	return tileCount .. " tiles captured; save the game to keep them"
+end
 
 -- =================================================================================
 -- Map tack placement from a plan file

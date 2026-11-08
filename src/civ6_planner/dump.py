@@ -99,6 +99,11 @@ def status_lines(lines):
     return list(dict.fromkeys(l.strip() for l in lines if any(w in l for w in wanted)))
 
 
-def latest_dump_from_save(path):
-    dumps = list(read_dumps(save_lines(path)))
+def scope(d):
+    """'revealed' (what the player has seen; the default) or 'full' (fog ignored)."""
+    return d.get("scope", "revealed")
+
+
+def latest_dump_from_save(path, wanted="revealed"):
+    dumps = [d for d in read_dumps(save_lines(path)) if scope(d) == wanted]
     return dumps[-1] if dumps else None
