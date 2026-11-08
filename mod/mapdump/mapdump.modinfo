@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Mod id="e6e9d8be-2deb-47fc-b1fa-4544fe21a045" version="1">
+  <Properties>
+    <Name>Map Dump</Name>
+    <Description>Dumps every tile revealed to the local player. Ctrl+Shift+D copies the dump to the clipboard; it is also printed to Lua.log on builds that write one.</Description>
+    <Teaser>Dumps revealed map data.</Teaser>
+    <Authors>Pierre</Authors>
+    <AffectsSavedGames>0</AffectsSavedGames>
+    <CompatibleVersions>1.2,2.0</CompatibleVersions>
+  </Properties>
+
+  <InGameActions>
+    <UpdateDatabase id="mapdump_probe">
+      <File>mapdump_probe.sql</File>
+    </UpdateDatabase>
+    <AddUserInterfaces id="mapdump_ui">
+      <Properties>
+        <Context>InGame</Context>
+      </Properties>
+      <File>ui/mapdump.xml</File>
+    </AddUserInterfaces>
+    <ReplaceUIScript id="mapdump_statusmessagepanel">
+      <Properties>
+        <LuaContext>StatusMessagePanel</LuaContext>
+        <LuaReplace>ui/mapdump_statusmessagepanel.lua</LuaReplace>
+      </Properties>
+    </ReplaceUIScript>
+    <ImportFiles id="mapdump_files">
+      <File>ui/mapdump.lua</File>
+      <File>ui/mapdump.xml</File>
+      <File>ui/mapdump_core.lua</File>
+      <File>ui/mapdump_statusmessagepanel.lua</File>
+      <File>ui/mapdump_plan.lua</File>
+    </ImportFiles>
+  </InGameActions>
+
+  <Files>
+    <File>mapdump_probe.sql</File>
+    <File>ui/mapdump.lua</File>
+    <File>ui/mapdump.xml</File>
+    <File>ui/mapdump_core.lua</File>
+    <File>ui/mapdump_statusmessagepanel.lua</File>
+    <File>ui/mapdump_plan.lua</File>
+  </Files>
+</Mod>

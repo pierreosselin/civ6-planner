@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Plan tacks (newest save)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "civ6_planner",
+      "args": ["plan"],
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+    },
+    {
+      "name": "Plan tacks (dry run)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "civ6_planner",
+      "args": ["plan", "--dry-run"],
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+    },
+    {
+      "name": "Watch saves and re-plan",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "civ6_planner",
+      "args": ["watch"],
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+    }
+  ]
+}

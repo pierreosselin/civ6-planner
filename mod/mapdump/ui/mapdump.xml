@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Context FontStyle="Stroke">
+  <!-- Status line below the top bar, so you can see the script is running. -->
+  <Label ID="Status" Anchor="C,T" Offset="0,90" Style="FontNormal18" Color="255,255,0,255" String="[MapDump] starting" />
+</Context>

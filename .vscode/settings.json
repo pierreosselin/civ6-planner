@@ -1,0 +1,8 @@
+{
+  "python.analysis.extraPaths": ["src"],
+  "python.testing.unittestEnabled": true,
+  "python.testing.pytestEnabled": false,
+  "python.testing.unittestArgs": ["-v", "-s", "./tests", "-t", "."],
+  "terminal.integrated.env.linux": { "PYTHONPATH": "${workspaceFolder}/src" },
+  "files.associations": { "*.modinfo": "xml" }
+}
