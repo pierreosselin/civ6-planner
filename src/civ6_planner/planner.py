@@ -1,5 +1,7 @@
-"""Placement decisions. First iteration: no real optimisation yet.
+"""Placement decisions.
 
+`plan(method="mip")` (default) asks the optimiser in model.py. `method="greedy"` is the
+first stub, kept to compare against:
 - City: a random tile where a city can be founded.
 - Campus: within the city's district range, on the tile with the best science
   adjacency (mountains, rainforest, reefs, geothermal fissures, other districts,
@@ -7,6 +9,8 @@
 """
 import random
 from dataclasses import dataclass, field
+
+from . import model
 
 CITY_ICON = "ICON_DISTRICT_CITY_CENTER"
 CAMPUS_ICON = "ICON_DISTRICT_CAMPUS"
@@ -39,22 +43,63 @@ def choose_campus(gmap, rules, city, rng):
     return rng.choice([t for t in candidates if science[t["i"]] == best]), best
 
 
-def plan(gmap, rules, rng=None):
-    """Returns the tacks to place, plus human-readable notes on the decisions."""
-    rng = rng or random.Random()
-    tacks, notes = [], []
-
+def plan_greedy(gmap, rules, rng):
+    """The first stub: a random city, then the best Campus tile for it."""
     city = choose_city(gmap, rules, rng)
     if city is None:
-        notes.append("no revealed tile where a city can be founded")
-        return tacks, notes
-    tacks.append(Tack(city["x"], city["y"], CITY_ICON, "City"))
-    notes.append(f"city at ({city['x']}, {city['y']}): {city['terrain']}")
+        return model.Plan(info={"status": "no city site"})
+    p = model.Plan(cities=[(city["x"], city["y"])], info={"status": "greedy"})
+    campus, _ = choose_campus(gmap, rules, city, rng)
+    if campus is not None:
+        p.districts.append(("DISTRICT_CAMPUS", (campus["x"], campus["y"]), (city["x"], city["y"])))
+    return p
 
-    campus, science = choose_campus(gmap, rules, city, rng)
-    if campus is None:
-        notes.append("no valid Campus tile within range of the city")
-    else:
-        tacks.append(Tack(campus["x"], campus["y"], CAMPUS_ICON, "Campus", {"YIELD_SCIENCE": science}))
-        notes.append(f"campus at ({campus['x']}, {campus['y']}): {campus['terrain']}, +{science} science adjacency")
-    return tacks, notes
+
+METHODS = ("mip", "greedy")
+
+
+def solve(gmap, rules, rng=None, method="mip"):
+    """The plan (a model.Plan) from the chosen method."""
+    if method == "mip":
+        return model.optimise(gmap, rules)
+    return plan_greedy(gmap, rules, rng or random.Random())
+
+
+def plan(gmap, rules, rng=None, method="mip"):
+    """Returns the tacks to place, plus human-readable notes on the decisions."""
+    p = solve(gmap, rules, rng, method)
+    return to_tacks(gmap, rules, p), explain(gmap, rules, p, method)
+
+
+def explain(gmap, rules, p, method):
+    """Human-readable notes on a plan: its score, the solver's run, each placement."""
+    notes = []
+    if not p.cities:
+        return [f"{method}: no revealed tile where a city can be founded ({p.info.get('status')})"]
+    score, parts = model.evaluate(gmap, rules, p)
+    notes.append(f"{method}: score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
+                 f" - covered tiles {parts['lost']:.1f}")
+    if method == "mip":
+        i = p.info
+        notes.append(f"HiGHS {i['status']} in {i['seconds']}s: {i['variables']} variables, {i['rows']} rows, "
+                     f"{i['city_candidates']} city sites considered")
+    for xy in p.cities:
+        notes.append(f"city at {xy}: {gmap.tiles[xy]['terrain']}, site value {model.site_value(gmap, gmap.tiles[xy]):.1f}")
+    for d, xy, _ in p.districts:
+        adj = ", ".join(f"+{v} {y[6:].lower()}" for y, v in _district_yields(gmap, rules, p, d, xy).items())
+        notes.append(f"{d[9:].lower().replace('_', ' ')} at {xy}: {gmap.tiles[xy]['terrain']}, {adj or 'no adjacency'}")
+    return notes
+
+
+def _district_yields(gmap, rules, p, district, xy):
+    planned = {c: model.CITY_CENTER for c in p.cities}
+    planned.update({t: d for d, t, _ in p.districts})
+    return rules.adjacency(gmap, gmap.tiles[xy], district, planned)
+
+
+def to_tacks(gmap, rules, p):
+    tacks = [Tack(x, y, CITY_ICON, "City") for x, y in p.cities]
+    for d, (x, y), _ in p.districts:
+        name = d[9:].replace("_", " ").title()
+        tacks.append(Tack(x, y, "ICON_" + d, name, _district_yields(gmap, rules, p, d, (x, y))))
+    return tacks

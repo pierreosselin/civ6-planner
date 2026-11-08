@@ -9,7 +9,14 @@ Civ VI + Map Dump mod ──(map dump inside each save)──▶ civ6_planner pl
         └──── Ctrl+Shift+T places tacks ◀── mod/…/mapdump_plan.lua
 ```
 
-## Current planner (first iteration, no optimisation yet)
+## Current planner
+
+The default planner is a MIP solved with HiGHS (`src/civ6_planner/model.py`): it picks
+one city and its Campus to maximise the city site's yields plus the Campus adjacency,
+minus the yields of the tile the Campus covers. The first stub below is still there
+as `--planner greedy`, for comparison.
+
+### Greedy stub
 
 - **City**: a random revealed tile where a city can be founded.
 - **Campus**: within 3 tiles of that city, on the tile with the best science

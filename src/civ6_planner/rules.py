@@ -79,11 +79,9 @@ class Rules:
             out.setdefault(district, []).append(rule)
         return out
 
-    def adjacency(self, gmap, tile, district, planned=None, other_districts=True):
+    def adjacency(self, gmap, tile, district, planned=None):
         """{yield: bonus} the district would get on `tile`. planned: {(x, y): district
-        type} of districts the plan adds (a planned city counts as DISTRICT_CITY_CENTER).
-        other_districts=False leaves out the "per 2 adjacent districts" rules (the
-        optimiser models those itself, since they depend on what else it places)."""
+        type} of districts the plan adds (a planned city counts as DISTRICT_CITY_CENTER)."""
         planned = planned or {}
 
         def district_at(n):
@@ -96,8 +94,6 @@ class Rules:
         neighbours = gmap.neighbours(tile)
         out = {}
         for rule in self.adjacencies.get(district, []):
-            if rule.get("other_district") and not other_districts:
-                continue
             if rule.get("other_district"):
                 count = sum(1 for n in neighbours if district_at(n) != "NONE")
             elif "terrain" in rule:

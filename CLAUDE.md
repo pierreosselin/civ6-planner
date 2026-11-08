@@ -2,9 +2,11 @@
 
 Recommends Civ VI (Gathering Storm) city, district and improvement placement from the
 map the player has revealed, and shows the plan in game as map tacks. The goal is an
-optimiser that maximises yields under the game's placement rules. Currently a stub:
-one random city plus a Campus on the tile with the best science adjacency
-(`Rules.adjacency`, from the DB's simple adjacency rules; ties random).
+optimiser that maximises yields under the game's placement rules. First MIP
+backbone (`model.py`): one city and its Campus, maximising a placeholder objective
+(site yields + Campus adjacency − covered tile). Kept simple on purpose: adjacency
+between *planned* districts (other than a district's own city centre) isn't
+modelled yet, because the coupling constraints made HiGHS slow.
 
 Owner: Pierre. Plays on the **native Linux (Aspyr) port under Steam**, Wayland session.
 Prefers developing without the game open, using the test maps and the HTML viewer.
@@ -18,8 +20,11 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
 ```
 
 - `src/civ6_planner/`: `dump.py` (read `MAPDUMP|…` records from saves), `gamemap.py`
-  (hex grid), `rules.py` (rules from the game DB), `planner.py` (decisions; the
-  optimiser goes here), `tacks.py` (writes the plan), `dataset.py` (test maps and
+  (hex grid), `rules.py` (rules from the game DB), `planner.py` (decisions: `mip` or
+  the old `greedy` stub), `model.py` (the optimiser: MIP formulation, objective
+  weights, `evaluate` to score any plan), `solver.py` (small MIP modelling layer over
+  HiGHS via `scipy.optimize.milp`, captures the HiGHS log), `docs/model.html` (the model's
+  maths, for Live Server; update it whenever `model.py` changes), `tacks.py` (writes the plan), `dataset.py` (test maps and
   masks), `viewer.py` (HTML view), `cli.py`.
 - `mod/mapdump/`: the Lua mod; `python3 -m civ6_planner install-mod` copies it to the
   game (keeps the current plan file).
@@ -31,12 +36,15 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
   with `make-map`; their `scenario.source` names the full map.
 - `results [-o DIR]` plans every map in `data/maps` and writes `results/<date-time>/`
   (git-ignored): `index.html` (tacks and notes per map, links to each map),
-  `summary.json`, and `<map>/decisions.json` + `<map>/map.html`.
+  `summary.json` (with scores), and per map `decisions.json`, `map.html` and
+  `optimisation.log` (model settings, HiGHS log, decisions). `--planner greedy`
+  runs the old stub for comparison.
 
 Run things from the repo root with `PYTHONPATH=src` (VS Code's terminal sets it):
 `python3 -m civ6_planner {plan,view,results,make-map,watch,clear,dump,install-mod} --help`.
-Tests: `PYTHONPATH=src python3 -m unittest discover -s tests`. No third-party
-dependencies; keep it that way unless there's a strong reason.
+Tests: `PYTHONPATH=src python3 -m unittest discover -s tests`. Only third-party
+dependency: SciPy (for HiGHS; already installed system-wide). Add others only for a
+strong reason.
 
 Skills in `.claude/skills/`: **view-map**, **plan-in-game**, **capture-test-map**,
 **mod-dev** (changing/debugging the mod). Read the relevant one before those tasks.

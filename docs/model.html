@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Placement model</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"
+        onload="renderMathInElement(document.body, {delimiters: [{left: '$$', right: '$$', display: true}, {left: '\\(', right: '\\)', display: false}]})"></script>
+<style>
+  :root { --bg:#f7f6f2; --panel:#ffffff; --ink:#1f1e1b; --muted:#6b6963; --line:#dddbd3; --accent:#2f5fb3; --note:#fbf3dc; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#1a1a19; --panel:#242422; --ink:#f0efec; --muted:#a3a29b; --line:#3a3a37; --accent:#8fb0ec; --note:#3a3322; }
+  }
+  :root[data-theme="dark"] { --bg:#1a1a19; --panel:#242422; --ink:#f0efec; --muted:#a3a29b; --line:#3a3a37; --accent:#8fb0ec; --note:#3a3322; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:32px 16px 64px; font:16px/1.6 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:860px; margin:0 auto; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:19px; margin:36px 0 8px; padding-top:12px; border-top:1px solid var(--line); }
+  .muted { color:var(--muted); font-size:14px; }
+  code { font:13.5px ui-monospace, monospace; background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:0 4px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:4px 18px; margin:12px 0; overflow-x:auto; }
+  .note { background:var(--note); border-radius:8px; padding:10px 14px; margin:12px 0; font-size:15px; }
+  table { border-collapse:collapse; width:100%; font-size:14.5px; margin:8px 0; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:13px; }
+  .tag { display:inline-block; min-width:2.2em; font-weight:700; color:var(--accent); }
+  ul { padding-left:20px; }
+  .katex-display { overflow-x:auto; overflow-y:hidden; padding:4px 0; }
+</style></head>
+<body><main>
+
+<h1>Placement model</h1>
+<p class="muted">The MIP the planner solves today (<code>src/civ6_planner/model.py</code>), solved with HiGHS through
+<code>scipy.optimize.milp</code>. Deliberately simple: one city and its Campus, optimal in under 0.4 s on the test maps.</p>
+
+<h2>Sets and data</h2>
+<table>
+  <tr><th>Symbol</th><th>Meaning</th><th>From</th></tr>
+  <tr><td>\(T\)</td><td>Revealed tiles of the map</td><td><code>GameMap</code></td></tr>
+  <tr><td>\(C \subseteq T\)</td><td>Candidate city sites: open land (not water, mountain, impassable, wonder; unowned or ours), feature allows settling, more than <code>CITY_MIN_RANGE</code> = 3 from every known city. Only the 400 best by site value \(s_c\) are kept.</td><td><code>Rules.can_found_city</code></td></tr>
+  <tr><td>\(D\)</td><td>District types to place per city; today \(D = \{\text{Campus}\}\)</td><td><code>optimise(districts=…)</code></td></tr>
+  <tr><td>\(V\subseteq T\)</td><td>Tiles a district may go on: open land, no city or district yet, not a luxury or strategic resource</td><td><code>Rules.can_place_district</code></td></tr>
+  <tr><td>\(N_r(t)\)</td><td>Revealed tiles at hex distance \(1..r\) from \(t\) (map wraps east–west)</td><td><code>GameMap.within</code></td></tr>
+  <tr><td>\(R_{c}\)</td><td>\(N_3(c)\cap V\): where city \(c\)'s districts may go (<code>CITY_MAX_BUY_PLOT_RANGE</code> = 3)</td><td></td></tr>
+  <tr><td>\(Y\)</td><td>Yield types: food, production, gold, science, culture, faith</td><td></td></tr>
+  <tr><td>\(y_{t,k}\)</td><td>Yield \(k\) of tile \(t\) as the game reports it (resources included)</td><td>map dump</td></tr>
+  <tr><td>\(n\)</td><td>Number of cities to found (default 1)</td><td><code>n_cities</code></td></tr>
+</table>
+
+<h2>Derived coefficients</h2>
+<p>Weighted value of a yield vector, with weights \(w_k\) (placeholders, see Parameters):</p>
+$$ v(t) \;=\; \sum_{k\in Y} w_k\, y_{t,k} $$
+<p>Site value of a city on \(c\): its centre plus every revealed tile within 2.</p>
+$$ s_c \;=\; v(c) + \sum_{t \in N_2(c)} v(t) $$
+<p>Adjacency of district \(d\) on tile \(t\) for the city on \(c\), from the game database
+(<code>District_Adjacencies</code>, see the table below). For each rule \(\rho\) of \(d\) giving \(\delta_\rho\) of yield
+\(k_\rho\) per \(m_\rho\) matching neighbours, with \(\text{cnt}_\rho(t; c)\) the matching neighbours of \(t\):</p>
+$$ a_{d,c,t} \;=\; \sum_{\rho} w_{k_\rho}\,\delta_\rho \left\lfloor \frac{\text{cnt}_\rho(t; c)}{m_\rho} \right\rfloor $$
+<p>Neighbours count as districts when they already hold a city or a district, or when they are \(c\) itself (the planned
+city centre). That is why \(a\) depends on \(c\). The floor is exact because \(a_{d,c,t}\) is a constant computed before
+solving.</p>
+<p>Objective coefficient of placing district \(d\) of city \(c\) on \(t\):</p>
+$$ g_{d,c,t} \;=\; a_{d,c,t} \;-\; \lambda\, v(t) \;+\; \beta_D $$
+
+<h2>Decision variables</h2>
+$$
+\begin{aligned}
+x_c &\in \{0,1\} && c \in C && \text{found a city on } c\\
+z_{d,c,t} &\in \{0,1\} && d\in D,\; c\in C,\; t \in R_c && \text{district } d \text{ of city } c \text{ goes on } t
+\end{aligned}
+$$
+
+<h2>Objective</h2>
+$$
+\max \;\; \sum_{c\in C} \big(s_c + \beta_C\big)\, x_c \;+\; \sum_{d\in D}\sum_{c\in C}\sum_{t\in R_c} g_{d,c,t}\; z_{d,c,t}
+$$
+<p>The reported <b>score</b> leaves the bonuses out: site value + adjacency − \(\lambda\,v\)(covered tiles).
+\(\beta_C\) and \(\beta_D\) are large enough that cities and districts are always placed when they can be.</p>
+
+<h2>Constraints</h2>
+<div class="card">
+<p><span class="tag">(1)</span>Number of cities</p>
+$$ \sum_{c\in C} x_c \;\le\; n $$
+<p><span class="tag">(2)</span>City spacing (only added when \(n>1\))</p>
+$$ x_a + x_b \;\le\; 1 \qquad \forall\, a,b\in C,\ \text{dist}(a,b) \le 3 $$
+<p><span class="tag">(3)</span>At most one district of each type per city, and only if the city is founded</p>
+$$ \sum_{t\in R_c} z_{d,c,t} \;\le\; x_c \qquad \forall\, d\in D,\ c\in C $$
+<p><span class="tag">(4)</span>One thing per tile</p>
+$$ x_t\,[t\in C] \;+\; \sum_{d\in D}\ \sum_{c\,:\,t\in R_c} z_{d,c,t} \;\le\; 1 \qquad \forall\, t\in T $$
+</div>
+<p>Placement rules (terrain, resources, ownership, existing cities) are applied by not creating the variable at all,
+through \(C\) and \(V\).</p>
+
+<h2>Adjacency rules used (Campus)</h2>
+<p class="muted">Read from <code>DebugGameplay.sqlite</code> at run time; rules needing a tech or civic, rivers, wonders,
+resources or improvements are skipped for now (the Campus has none).</p>
+<table>
+  <tr><th>Rule</th><th>Matching neighbour</th><th>\(\delta\)</th><th>per \(m\)</th></tr>
+  <tr><td><code>Mountains_Science1..5</code></td><td>grass / plains / desert / tundra / snow mountain</td><td>+1 science</td><td>1</td></tr>
+  <tr><td><code>Jungle_Science</code></td><td>rainforest</td><td>+1 science</td><td>2</td></tr>
+  <tr><td><code>District_Science</code></td><td>any district or city centre (existing, or the planned centre \(c\))</td><td>+1 science</td><td>2</td></tr>
+  <tr><td><code>Reef_Science</code>, <code>GBR_Science</code></td><td>reef, Great Barrier Reef</td><td>+2 science</td><td>1</td></tr>
+  <tr><td><code>Geothermal_Science</code></td><td>geothermal fissure</td><td>+2 science</td><td>1</td></tr>
+  <tr><td><code>Pamukkale_Science</code></td><td>Pamukkale</td><td>+2 science</td><td>1</td></tr>
+  <tr><td><code>Government_Science</code></td><td>Government Plaza (existing only)</td><td>+1 science</td><td>1</td></tr>
+</table>
+
+<h2>Parameters</h2>
+<table>
+  <tr><th>Symbol</th><th>Name in code</th><th>Value</th><th>Meaning</th></tr>
+  <tr><td>\(w_k\)</td><td><code>WEIGHTS</code></td><td>food 1, production 1, gold 0.5, science 1, culture 1, faith 0.5</td><td>Value of one unit of each yield (placeholder)</td></tr>
+  <tr><td>2</td><td><code>SITE_RADIUS</code></td><td>2</td><td>Radius counted in the site value \(s_c\)</td></tr>
+  <tr><td>\(\lambda\)</td><td><code>LOSS_FACTOR</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
+  <tr><td>\(\beta_C\)</td><td><code>CITY_BONUS</code></td><td>100</td><td>Per city founded</td></tr>
+  <tr><td>\(\beta_D\)</td><td><code>DISTRICT_BONUS</code></td><td>10</td><td>Per district placed</td></tr>
+  <tr><td></td><td><code>max_city_candidates</code></td><td>400</td><td>Best sites by \(s_c\) kept as \(C\)</td></tr>
+  <tr><td></td><td><code>time_limit</code>, gap</td><td>60 s, \(10^{-6}\)</td><td>HiGHS limits</td></tr>
+</table>
+
+<h2>Size and solve times</h2>
+<table>
+  <tr><th>Map</th><th>City sites \(|C|\)</th><th>Variables</th><th>Rows</th><th>Time</th></tr>
+  <tr><td>continents-revealed (43 tiles)</td><td>38</td><td>737</td><td>76</td><td>0.04 s</td></tr>
+  <tr><td>continents-radius6 (127 tiles)</td><td>103</td><td>2,408</td><td>201</td><td>0.2 s</td></tr>
+  <tr><td>continents (3,404 tiles)</td><td>400</td><td>10,076</td><td>1,107</td><td>0.4 s</td></tr>
+</table>
+<p class="muted">All optimal. The full log of each run is in <code>results/&lt;run&gt;/&lt;map&gt;/optimisation.log</code>.</p>
+
+<h2>Not modelled yet</h2>
+<ul>
+  <li><b>Adjacency between planned districts</b>, other than a district and its own city centre. Exact for one city with
+  one district; with more it needs integer variables \(k_{d,t}\) with \(m\,k_{d,t} \le\) (existing + planned districts next
+  to \(t\)) and \(k_{d,t}\le \lfloor 6/m\rfloor \sum_c z_{d,c,t}\). A first try made the relaxation weak and HiGHS slow,
+  so it waits. <code>evaluate</code> already counts these bonuses when scoring a plan.</li>
+  <li>The site value is a proxy: no housing (fresh water, coast), no amenities, no growth over time, no tile improvements.</li>
+  <li>District-specific terrain rules (<code>District_ValidTerrains</code>), other districts, wonders, improvements.</li>
+  <li>The city may be placed far from the player's start; no travel time or settler cost.</li>
+</ul>
+
+<div class="note">The greedy stub (<code>--planner greedy</code>) is scored with the same objective by
+<code>model.evaluate</code>, so its <code>score</code> in <code>summary.json</code> compares directly with the MIP's.</div>
+
+</main></body></html>

@@ -6,13 +6,14 @@ read and checked on the map without opening Civ VI.
       summary.json           the same, for comparing runs
       <map>/decisions.json   one per map in data/maps
       <map>/map.html         the map with the tacks drawn
+      <map>/optimisation.log model settings, the solver's log, the decisions
 """
 import html
 import json
 import os
 import random
 
-from . import dataset, planner, viewer
+from . import dataset, model, planner, viewer
 from .gamemap import GameMap
 
 def default_scenarios():
@@ -39,32 +40,55 @@ def _tack_record(gmap, t):
             "tile": {k: tile.get(k) for k in ("terrain", "feature", "resource", "hills", "river", "coastal_land")}}
 
 
-def run(out_dir, scenarios=None, seed=1, rules=None):
+def run(out_dir, scenarios=None, seed=1, rules=None, method="mip"):
     """Plan every scenario and write the folder. Returns the summary dict."""
     from .rules import Rules
     rules = rules or Rules.from_game()
     os.makedirs(out_dir, exist_ok=True)
-    summary = {"seed": seed, "scenarios": []}
+    summary = {"seed": seed, "method": method, "scenarios": []}
     for name in scenarios or default_scenarios():
         d = dataset.load_map(name)
         original = dataset.source_of(d)
         gmap = GameMap(d)
-        planned, notes = planner.plan(gmap, rules, random.Random(seed))
+        p = planner.solve(gmap, rules, random.Random(seed), method)
+        planned, notes = planner.to_tacks(gmap, rules, p), planner.explain(gmap, rules, p, method)
+        score, parts = model.evaluate(gmap, rules, p) if p.cities else (0.0, {})
         sc_dir = os.path.join(out_dir, name)
         os.makedirs(sc_dir, exist_ok=True)
         viewer.write(d, os.path.join(sc_dir, "map.html"), title=name, tacks=planned,
                      notes=notes, hidden_from=original)
         record = {"name": name, "description": describe(d), "tiles": len(gmap),
+                  "score": round(score, 2), "score_parts": parts, "solver": p.info,
                   "tacks": [_tack_record(gmap, t) for t in planned], "notes": notes,
-                  "map": f"{name}/map.html"}
+                  "map": f"{name}/map.html", "log": f"{name}/optimisation.log"}
         with open(os.path.join(sc_dir, "decisions.json"), "w") as f:
             json.dump(record, f, indent=1)
+        with open(os.path.join(sc_dir, "optimisation.log"), "w") as f:
+            f.write(_log(name, d, method, seed, p, record))
         summary["scenarios"].append(record)
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=1)
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(_index(summary, os.path.basename(os.path.normpath(out_dir))))
     return summary
+
+
+def _log(name, d, method, seed, p, record):
+    """The run in text: model settings, the solver's own log, then the decisions."""
+    rule = "=" * 72
+    lines = [f"{name}: {describe(d)}, {record['tiles']} tiles", f"planner: {method}, seed {seed}", ""]
+    if method == "mip":
+        lines += ["Model settings (model.py)",
+                  f"  weights        {model.WEIGHTS}",
+                  f"  site radius    {model.SITE_RADIUS}   loss factor {model.LOSS_FACTOR}"
+                  f"   city bonus {model.CITY_BONUS}   district bonus {model.DISTRICT_BONUS}",
+                  f"  size           " + ", ".join(f"{k} {v}" for k, v in p.info.items() if k != "objective"),
+                  "", rule, "HiGHS log (it minimises -objective; objective = score + bonuses)", rule,
+                  p.log.rstrip(), rule, ""]
+    lines += ["Decisions"] + [f"  {n}" for n in record["notes"]]
+    lines += ["", "Tacks"] + [f"  {t['name']:<8} ({t['x']}, {t['y']})  {t['tile']}  adds {t['yields'] or '-'}"
+                              for t in record["tacks"]]
+    return "\n".join(lines) + "\n"
 
 
 def _index(summary, run_name):
@@ -78,12 +102,12 @@ def _index(summary, run_name):
             for t in r["tacks"]) or '<tr><td colspan="3" class="muted">no tacks placed</td></tr>'
         notes = "".join(f"<li>{e(n)}</li>" for n in r["notes"])
         cards.append(f"""<section class="card">
-  <div class="head"><h2>{e(r['name'])}</h2><a class="btn" href="{e(r['map'])}">Open map →</a></div>
-  <p class="muted">{e(r['description'])} · {r['tiles']} tiles</p>
+  <div class="head"><h2>{e(r['name'])}</h2><span><a class="btn" href="{e(r['log'])}">Log</a> · <a class="btn" href="{e(r['map'])}">Open map →</a></span></div>
+  <p class="muted">{e(r['description'])} · {r['tiles']} tiles · <b>score {r['score']}</b></p>
   <table><thead><tr><th>Tack</th><th>Tile</th><th>Terrain</th></tr></thead><tbody>{rows}</tbody></table>
   <ul>{notes}</ul>
 </section>""")
-    return _INDEX.replace("__RUN__", e(run_name)).replace("__SEED__", e(str(summary["seed"]))) \
+    return _INDEX.replace("__RUN__", e(run_name)).replace("__SEED__", e(f'{summary["method"]} planner, seed {summary["seed"]}')) \
         .replace("__CARDS__", "\n".join(cards))
 
 
@@ -119,7 +143,7 @@ _INDEX = """<!doctype html>
 </style></head>
 <body><main>
 <h1>Planner results</h1>
-<p class="muted">Run <b>__RUN__</b> · planner seed __SEED__ · each map opens with the tacks drawn (red C city, blue S campus)</p>
+<p class="muted">Run <b>__RUN__</b> · __SEED__ · each map opens with the tacks drawn (red C city, blue S campus)</p>
 <div class="grid">
 __CARDS__
 </div>

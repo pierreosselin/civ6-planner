@@ -4,7 +4,11 @@ Variables and linear rows are added by name; `solve()` maximises the objective w
 HiGHS through scipy.optimize.milp. Another backend (CP-SAT, SCIP…) only needs another
 `solve`.
 """
+import contextlib
 import math
+import os
+import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 
@@ -16,6 +20,7 @@ class Solution:
     values: dict           # variable name -> value (rounded for integer variables)
     seconds: float
     stats: dict = field(default_factory=dict)
+    log: str = ""          # HiGHS's own log of the run
 
     def __getitem__(self, name):
         return self.values.get(name, 0)
@@ -56,6 +61,13 @@ class Model:
             raise ValueError("empty row that can't hold")
 
     def solve(self, time_limit=60, gap=1e-6):
+        """Maximise; HiGHS's log goes into Solution.log (not to the terminal)."""
+        with _capture_stdout() as out:
+            sol = self._solve(time_limit, gap)
+        sol.log = out.read()
+        return sol
+
+    def _solve(self, time_limit, gap):
         import numpy as np
         from scipy.optimize import Bounds, LinearConstraint, milp
         from scipy.sparse import coo_array
@@ -74,7 +86,7 @@ class Model:
             constraints.append(LinearConstraint(a, [lo for _, lo, _ in self.rows], [hi for _, _, hi in self.rows]))
         res = milp(c=-np.array(self.obj, dtype=float), constraints=constraints,
                    integrality=np.array(self.integer, dtype=int), bounds=Bounds(self.lb, self.ub),
-                   options={"time_limit": time_limit, "mip_rel_gap": gap, "disp": False})
+                   options={"time_limit": time_limit, "mip_rel_gap": gap, "disp": True})
         seconds = time.perf_counter() - start
         status = {0: "optimal", 1: "time limit", 2: "infeasible", 3: "unbounded"}.get(res.status, res.message)
         stats = {"variables": n, "integer": sum(self.integer), "rows": len(self.rows),
@@ -84,3 +96,29 @@ class Model:
         values = {name: (round(x) if integer else x)
                   for name, x, integer in zip(self.names, res.x, self.integer)}
         return Solution(status, -res.fun, values, seconds, stats)
+
+
+class _Captured:
+    def __init__(self):
+        self.text = ""
+
+    def read(self):
+        return self.text
+
+
+@contextlib.contextmanager
+def _capture_stdout():
+    """Capture what C code (HiGHS) prints to file descriptor 1."""
+    out = _Captured()
+    sys.stdout.flush()
+    saved = os.dup(1)
+    with tempfile.TemporaryFile(mode="w+b") as tmp:
+        os.dup2(tmp.fileno(), 1)
+        try:
+            yield out
+        finally:
+            sys.stdout.flush()
+            os.dup2(saved, 1)
+            os.close(saved)
+            tmp.seek(0)
+            out.text = tmp.read().decode("utf-8", "replace")

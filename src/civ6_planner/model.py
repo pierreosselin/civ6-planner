@@ -1,26 +1,30 @@
 """The placement optimiser: which tiles get cities and districts, as a MIP.
 
+Kept deliberately simple for now (it solves in about a second on the test maps):
+
 Decision variables
   city[c]        found a city on candidate tile c
   dist[d,c,t]    district d of the city on c goes on tile t (t within district range of c)
-  k[d,t,r]       "+change per `tiles` adjacent districts" bonus units for district d on t
-                 under adjacency rule r (an integer, so the bonus rounds down like the game)
 
 Constraints
   sum(city) <= n_cities; cities closer than the game allows exclude each other
   each city has at most one of each district, only if it exists: sum_t dist[d,c,t] <= city[c]
   one thing per tile: city[t] + sum dist[·,·,t] <= 1
-  k * tiles <= existing districts next to t + planned cities/districts next to t,
-               and k = 0 unless d is on t
 
 Objective (weights below are placeholders to be tuned)
   city site value: weighted yields of the centre and the tiles within 2
-  + district adjacency (fixed: mountains, rainforest, reef…; variable: other districts)
+  + district adjacency, computed per (city, tile) as a constant: terrain/features,
+    existing districts, and the district's own city centre
   - LOSS_FACTOR × the weighted yields of the tile a district covers
   + CITY_BONUS per city and DISTRICT_BONUS per district so they're placed when possible
 
-`evaluate` scores any plan (the greedy one too) with the same objective, in plain
-Python, so plans from different planners can be compared and the MIP checked.
+Not modelled yet: adjacency between *planned* districts other than a district's own
+city centre (e.g. Campus next to a planned Holy Site, or another city's centre). That
+is exact for one city with one district; with more, it needs coupling variables
+(k * tiles <= linked planned neighbours), which made HiGHS much slower, so it waits.
+
+`evaluate` scores any plan (the greedy one too) in plain Python. It counts every
+planned district, so it can be above the MIP's objective when planned districts touch.
 """
 from dataclasses import dataclass, field
 
@@ -42,6 +46,7 @@ class Plan:
     cities: list = field(default_factory=list)      # [(x, y)]
     districts: list = field(default_factory=list)   # [(district type, (x, y), city (x, y))]
     info: dict = field(default_factory=dict)        # solver status, timings, sizes
+    log: str = ""                                   # the solver's log
 
 
 def weighted(yields):
@@ -51,14 +56,6 @@ def weighted(yields):
 
 def site_value(gmap, tile):
     return weighted(tile) + sum(weighted(t) for t in gmap.within(tile, SITE_RADIUS))
-
-
-def _occupied(tile):
-    return bool(tile.get("is_city")) or tile.get("district", "NONE") != "NONE"
-
-
-def _variable_rules(rules, district):
-    return [r for r in rules.adjacencies.get(district, []) if r.get("other_district")]
 
 
 def evaluate(gmap, rules, plan):
@@ -104,7 +101,6 @@ def optimise(gmap, rules, n_cities=1, districts=("DISTRICT_CAMPUS",), max_city_c
                 if b in site and a < b and ("city", b) in m.index:
                     m.row({("city", a): 1, ("city", b): 1}, hi=1)
 
-    on_tile = {}  # (district, tile xy) -> its dist variables (any city)
     for d in districts:
         for t in city_tiles:
             c = (t["x"], t["y"])
@@ -113,11 +109,12 @@ def optimise(gmap, rules, n_cities=1, districts=("DISTRICT_CAMPUS",), max_city_c
                 xy = (n["x"], n["y"])
                 if not rules.can_place_district(gmap, n):
                     continue
-                fixed = weighted(rules.adjacency(gmap, n, d, other_districts=False))
+                # Adjacency with this district's own city centre counted as planned;
+                # other planned districts aren't (see the module docstring).
+                fixed = weighted(rules.adjacency(gmap, n, d, {c: CITY_CENTER}))
                 name = m.var(("dist", d, c, xy), obj=fixed - LOSS_FACTOR * weighted(n) + DISTRICT_BONUS)
                 names.append(name)
                 occ.setdefault(xy, []).append(name)
-                on_tile.setdefault((d, xy), []).append(name)
             if names:
                 m.row([(v, 1) for v in names] + [(("city", c), -1)], hi=0)
 
@@ -125,22 +122,8 @@ def optimise(gmap, rules, n_cities=1, districts=("DISTRICT_CAMPUS",), max_city_c
         if len(names) > 1:
             m.row([(v, 1) for v in names], hi=1)
 
-    # "+change per `tiles` adjacent districts": k * tiles <= districts next to the tile.
-    for (d, xy), names in on_tile.items():
-        tile = gmap.tiles[xy]
-        neighbours = gmap.neighbours(tile)
-        fixed = sum(1 for n in neighbours if _occupied(n))
-        planned_next = [v for n in neighbours for v in occ.get((n["x"], n["y"]), [])]
-        for r, rule in enumerate(_variable_rules(rules, d)):
-            cap = 6 // rule["tiles"]
-            k = m.var(("k", d, xy, r), ub=cap, obj=WEIGHTS[rule["yield"]] * rule["change"])
-            # k*tiles - planned neighbours + 6*placed <= fixed + 6  (no limit when d isn't on t)
-            m.row([(k, rule["tiles"])] + [(v, -1) for v in planned_next] + [(v, 6) for v in names],
-                  hi=fixed + 6)
-            m.row([(k, 1)] + [(v, -cap) for v in names], hi=0)
-
     sol = m.solve(time_limit=time_limit)
-    plan = Plan(info={"status": sol.status, "seconds": round(sol.seconds, 3), "objective": sol.objective,
+    plan = Plan(log=sol.log, info={"status": sol.status, "seconds": round(sol.seconds, 3), "objective": sol.objective,
                       "city_candidates": len(cxy), **sol.stats})
     for name, v in sol.values.items():
         if v < 0.5:

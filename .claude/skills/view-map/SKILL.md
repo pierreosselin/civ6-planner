@@ -35,8 +35,11 @@ It plans every map in `data/maps` and writes (git-ignored):
 - `index.html`: a card per map with the tacks placed (tile, terrain, yields) and the
   planner's notes, each linking to its map;
 - `<map>/map.html`: the map with the tacks; `<map>/decisions.json`: the scenario,
-  tacks (with tile fields and yields) and notes; `summary.json`: all of them, for
-  comparing runs (e.g. before/after a planner change with the same `--seed`).
+  tacks (with tile fields and yields), notes, score and its parts, solver stats;
+  `<map>/optimisation.log`: model settings, the full HiGHS log, the decisions;
+  `summary.json`: all of them, for comparing runs (e.g. before/after a planner change).
+- `--planner greedy` runs the old stub instead of the MIP; both are scored by
+  `model.evaluate`, so their `score`s are comparable.
 
 ## Test maps in data/maps
 

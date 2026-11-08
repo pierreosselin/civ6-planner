@@ -68,7 +68,7 @@ def cmd_plan(args):
     d, label, _ = _load(args)
     gmap = GameMap(d)
     print(f"Map from {label}: turn {gmap.turn}, {len(gmap)} revealed tiles")
-    planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed))
+    planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed), args.planner)
     for note in notes:
         print("  " + note)
     if args.dry_run:
@@ -110,7 +110,8 @@ def cmd_watch(args):
             time.sleep(1)  # let the game finish writing
             last = (save, os.path.getmtime(save))
             try:
-                cmd_plan(argparse.Namespace(save=save, map=None, mask=None, seed=args.seed, dry_run=False))
+                cmd_plan(argparse.Namespace(save=save, map=None, mask=None, seed=args.seed, dry_run=False,
+                                            planner=args.planner))
             except SystemExit as e:
                 print(e, file=sys.stderr)
         time.sleep(args.interval)
@@ -121,7 +122,7 @@ def cmd_view(args):
     gmap = GameMap(d)
     planned, notes = [], []
     if args.plan:
-        planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed))
+        planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed), args.planner)
     path = viewer.write(d, args.output, title=label, tacks=planned, notes=notes, hidden_from=original)
     print(f"{label}: {len(gmap)} tiles{', ' + str(len(planned)) + ' tacks' if args.plan else ''} -> {path}")
     if args.open:
@@ -147,11 +148,11 @@ def cmd_results(args):
     scenarios = results.default_scenarios()
     if args.only:
         scenarios = [s for s in scenarios if any(k in s for k in args.only)]
-    summary = results.run(out, scenarios, seed=args.seed)
+    summary = results.run(out, scenarios, seed=args.seed, method=args.planner)
     for r in summary["scenarios"]:
         placed = ", ".join(f"{t['name']}{''.join(f' +{v} {k[6:].lower()}' for k, v in t['yields'].items())} ({t['x']}, {t['y']})"
                            for t in r["tacks"]) or "nothing"
-        print(f"  {r['name']:<22} {placed}")
+        print(f"  {r['name']:<22} score {r['score']:>6}  {placed}")
     print(f"-> {os.path.join(out, 'index.html')}")
     if args.open:
         import webbrowser
@@ -179,11 +180,13 @@ def main(argv=None):
     p = sub.add_parser("plan", help="plan tacks from the newest save's map dump (or --map)")
     _add_map_args(p)
     p.add_argument("--seed", type=int, help="random seed, for repeatable choices")
+    p.add_argument("--planner", choices=planner.METHODS, default="mip", help="mip (default) or the greedy stub")
     p.add_argument("--dry-run", action="store_true", help="print the plan instead of writing it")
     p.set_defaults(func=cmd_plan)
 
     p = sub.add_parser("watch", help="re-plan each time the game saves")
     p.add_argument("--seed", type=int)
+    p.add_argument("--planner", choices=planner.METHODS, default="mip")
     p.add_argument("--interval", type=float, default=2.0, help="seconds between checks")
     p.set_defaults(func=cmd_watch)
 
@@ -202,6 +205,7 @@ def main(argv=None):
     _add_map_args(p)
     p.add_argument("--plan", action="store_true", help="run the planner and draw its tacks")
     p.add_argument("--seed", type=int, help="planner seed")
+    p.add_argument("--planner", choices=planner.METHODS, default="mip", help="mip (default) or the greedy stub")
     p.add_argument("-o", "--output", default="view.html")
     p.add_argument("--open", action="store_true", help="open the page in your browser")
     p.set_defaults(func=cmd_view)
@@ -214,6 +218,7 @@ def main(argv=None):
     p = sub.add_parser("results", help="run the planner on every map in data/maps and write a results folder")
     p.add_argument("-o", "--output", help="folder (default results/<date-time>)")
     p.add_argument("--seed", type=int, default=1, help="planner seed (default 1)")
+    p.add_argument("--planner", choices=planner.METHODS, default="mip", help="mip (default) or the greedy stub")
     p.add_argument("--only", nargs="+", metavar="TEXT", help="only maps whose name contains TEXT")
     p.add_argument("--open", action="store_true", help="open index.html in your browser")
     p.set_defaults(func=cmd_results)

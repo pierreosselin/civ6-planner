@@ -4,7 +4,7 @@ import tempfile
 import unittest
 import zlib
 
-from civ6_planner import dataset, dump, planner
+from civ6_planner import dataset, dump, model, planner, solver
 from civ6_planner.gamemap import GameMap
 from civ6_planner.rules import Rules
 
@@ -115,6 +115,73 @@ class AdjacencyTest(unittest.TestCase):
         # ...but with a planned city next to it, two districts give +1.
         planned = {(n[5]["x"], n[5]["y"]): "DISTRICT_CITY_CENTER"}
         self.assertEqual(Rules().adjacency(gmap, t, "DISTRICT_CAMPUS", planned), {"YIELD_SCIENCE": 5})
+
+
+def yields(food=0, prod=0):
+    return {"YIELD_FOOD": food, "YIELD_PRODUCTION": prod}
+
+
+class SolverTest(unittest.TestCase):
+    def test_knapsack(self):
+        m = solver.Model()
+        for name, value, weight in [("a", 5, 4), ("b", 4, 3), ("c", 3, 2)]:
+            m.var(name, obj=value)
+        m.row({"a": 4, "b": 3, "c": 2}, hi=5)
+        sol = m.solve()
+        self.assertEqual((sol.status, sol["a"], sol["b"], sol["c"], sol.objective), ("optimal", 0, 1, 1, 7))
+
+
+class OptimiserTest(unittest.TestCase):
+    def check_score(self, gmap, rules, plan, n_districts):
+        """The MIP's own objective must equal evaluate() plus the placement bonuses."""
+        score, _ = model.evaluate(gmap, rules, plan)
+        expected = score + model.CITY_BONUS * len(plan.cities) + model.DISTRICT_BONUS * n_districts
+        self.assertAlmostEqual(plan.info["objective"], expected, places=6)
+
+    def test_city_on_best_site_and_campus_by_mountains(self):
+        # Food only around (5, 6); three mountains around (12, 6). Site value pulls the
+        # city to (5, 6)... unless the Campus is worth more: here it isn't in range, so
+        # the city goes where the food is and the Campus takes the best tile it can reach.
+        special = {(x, y): yields(food=2) for x in range(3, 8) for y in range(4, 9)}
+        base = full_map()
+        for n in base.neighbours(base.tiles[(7, 6)])[:3]:
+            special[(n["x"], n["y"])] = dict(MOUNTAIN)
+        gmap = full_map(special)
+        rules = Rules()
+        plan = model.optimise(gmap, rules)
+        self.assertEqual(plan.info["status"], "optimal")
+        self.assertEqual(len(plan.cities), 1)
+        [(d, xy, city)] = plan.districts
+        self.assertEqual((d, city), ("DISTRICT_CAMPUS", plan.cities[0]))
+        self.assertEqual(rules.adjacency(gmap, gmap.tiles[xy], d).get("YIELD_SCIENCE"), 3)
+        self.check_score(gmap, rules, plan, 1)
+
+    def test_planned_city_counts_as_adjacent_district(self):
+        # An existing district at (10, 6): a Campus touching both it and the new city
+        # gets +1 from "+1 per 2 districts"; everything else is flat.
+        gmap = full_map({(10, 6): {"district": "DISTRICT_HOLY_SITE"}})
+        rules = Rules()
+        plan = model.optimise(gmap, rules)
+        [(d, xy, city)] = plan.districts
+        planned = {city: model.CITY_CENTER}
+        self.assertEqual(rules.adjacency(gmap, gmap.tiles[xy], d, planned), {"YIELD_SCIENCE": 1})
+        self.check_score(gmap, rules, plan, 1)
+
+    def test_cities_keep_their_distance(self):
+        gmap = full_map()
+        rules = Rules()
+        plan = model.optimise(gmap, rules, n_cities=3, districts=())
+        self.assertEqual(len(plan.cities), 3)
+        for i, a in enumerate(plan.cities):
+            for b in plan.cities[i + 1:]:
+                self.assertGreater(gmap.distance(a, b), rules.city_min_range)
+
+    def test_greedy_and_mip_tacks(self):
+        gmap = full_map({(10, 6): MOUNTAIN})
+        for method in planner.METHODS:
+            tacks, notes = planner.plan(gmap, Rules(), random.Random(0), method)
+            self.assertEqual([t.icon for t in tacks], [planner.CITY_ICON, planner.CAMPUS_ICON], method)
+            self.assertTrue(notes[0].startswith(method), notes)
 
 
 class MaskTest(unittest.TestCase):
