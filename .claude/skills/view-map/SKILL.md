@@ -28,7 +28,7 @@ Hover shows every tile field; drag pans, scroll zooms; checkboxes for hidden til
 
 ```bash
 PYTHONPATH=src python3 -m civ6_planner results -o results/demo      # default: results/<date-time>
-PYTHONPATH=src python3 -m civ6_planner results --only radius6 --seed 3
+PYTHONPATH=src python3 -m civ6_planner results --only radius6 --planner greedy --seed 3
 ```
 
 It plans every map in `data/maps` and writes (git-ignored):
@@ -65,7 +65,7 @@ PYTHONPATH=src python3 -m civ6_planner view --plan -o view.html          # newes
 ```
 
 `--map` takes a name in `data/maps` or any dump JSON; `--mask …` masks on the fly
-without saving; `--plan` runs the planner (`--seed`). Name pages `view*.html`
+without saving; `--plan` runs the planner (`--planner mip|greedy`, `--seed` for greedy). Name pages `view*.html`
 (git-ignored).
 
 ## Show it

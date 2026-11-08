@@ -23,9 +23,11 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
   (hex grid), `rules.py` (rules from the game DB), `planner.py` (decisions: `mip` or
   the old `greedy` stub), `model.py` (the optimiser: MIP formulation, objective
   weights, `evaluate` to score any plan), `solver.py` (small MIP modelling layer over
-  HiGHS via `scipy.optimize.milp`, captures the HiGHS log), `docs/model.html` (the model's
-  maths, for Live Server; update it whenever `model.py` changes), `tacks.py` (writes the plan), `dataset.py` (test maps and
-  masks), `viewer.py` (HTML view), `cli.py`.
+  HiGHS via `scipy.optimize.milp`, captures the HiGHS log), `tacks.py` (writes the
+  plan), `dataset.py` (test maps and masks), `viewer.py` (HTML view), `results.py`
+  (results folders), `cli.py`.
+- `docs/model.html`: the model's maths (KaTeX), for Pierre's Live Server
+  (`http://127.0.0.1:5500/docs/model.html`). Keep it in step with `model.py`.
 - `mod/mapdump/`: the Lua mod; `python3 -m civ6_planner install-mod` copies it to the
   game (keeps the current plan file).
 - `data/maps/continents.json`, `shuffle.json`: fully revealed 74×46 maps (turn 2,
@@ -48,6 +50,20 @@ strong reason.
 
 Skills in `.claude/skills/`: **view-map**, **plan-in-game**, **capture-test-map**,
 **mod-dev** (changing/debugging the mod). Read the relevant one before those tasks.
+
+## Changing the optimiser
+
+1. Edit `model.py`; add or adjust a test in `tests/test_planner.py` (the MIP's
+   objective must equal `evaluate()` plus the bonuses).
+2. `python3 -m civ6_planner results -o results/<name>` and compare `summary.json`
+   scores with the previous run and with `--planner greedy`; check each
+   `optimisation.log` says `Optimal` and how long it took. Look at the maps (**view-map**).
+3. Update `docs/model.html` (and the size/time table) and CLAUDE.md's summary.
+
+Pierre prefers a simple model that solves fast over a complete one that's slow: if a
+formulation makes HiGHS slow (seconds on the test maps, or a time limit), simplify the
+constraints or objective first and note what was left out in `model.py` and
+`docs/model.html`.
 
 ## Map data model
 

@@ -14,13 +14,16 @@ description: Run the planner on the user's live Civ VI game and get its tacks on
    PYTHONPATH=src python3 -m civ6_planner plan              # writes Mods/mapdump/ui/mapdump_plan.lua
    PYTHONPATH=src python3 -m civ6_planner plan --dry-run    # print only
    ```
-   `--seed N` makes random choices repeatable. `watch` re-plans after every save.
+   The default planner is the MIP (`model.py`); it's deterministic and prints its
+   score and HiGHS status in the notes. `--planner greedy` runs the old random stub
+   (`--seed N` makes it repeatable). `watch [--planner …]` re-plans after every save.
    `clear` writes an empty plan (Ctrl+Shift+T then removes our tacks).
+   The city may be anywhere in the revealed area (no travel cost is modelled yet).
 3. **Place**: the user presses **Ctrl+Shift+T** in game. A status message appears:
    "Map Dump: tacks placed N, removed M, skipped K (your own tack there)". Works
    mid-game, no reload. Loading a save also places the current plan.
-4. Optionally show the same plan off-game: the **view-map** skill with `--plan` and the
-   same `--seed`.
+4. Optionally show the same plan off-game: the **view-map** skill with `view --plan`
+   (same `--planner`, and `--seed` for greedy).
 
 ## Checking what happened
 
