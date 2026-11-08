@@ -25,7 +25,23 @@ def load_map(name_or_path):
         return json.load(f)
 
 
-def mask(full, mode="blob", size=60, centre=None, seed=None, resources="all"):
+def source_of(d):
+    """The full map a masked map was cut from (to show its hidden tiles), or None."""
+    name = (d.get("scenario") or {}).get("source")
+    return load_map(name) if name else None
+
+
+def player_centre(full):
+    """(x, y) of the middle of what the player had revealed at capture: the revealed
+    tile closest to all the others (test maps have no player city yet)."""
+    gmap = GameMap({**full, "cities": []})
+    shown = [t for t in gmap if t.get("revealed", 1)]
+    best = min(shown, key=lambda t: (max(gmap.distance(t, s) for s in shown),
+                                     sum(gmap.distance(t, s) for s in shown)))
+    return best["x"], best["y"]
+
+
+def mask(full,mode="blob", size=60, centre=None, seed=None, resources="all"):
     """A scenario from a full map.
 
     mode:

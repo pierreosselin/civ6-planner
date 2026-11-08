@@ -24,7 +24,7 @@ def write(d, path, title="", tacks=(), notes=(), hidden_from=None):
     data = {
         "w": d["w"], "h": d["h"], "turn": d["turn"],
         "tiles": d["tiles"], "hidden": hidden,
-        "tacks": [{"x": t.x, "y": t.y, "icon": t.icon, "name": t.name} for t in tacks],
+        "tacks": [{"x": t.x, "y": t.y, "icon": t.icon, "name": t.name, "yields": getattr(t, "yields", {})} for t in tacks],
         "resourceClass": _resource_classes(),
     }
     page = (_TEMPLATE
@@ -55,6 +55,11 @@ _TEMPLATE = r"""<!doctype html>
   .legend { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:3px 8px; font-size:12px; margin:8px 0 12px; }
   .sw { display:inline-block; width:11px; height:11px; border-radius:2px; vertical-align:-1px; margin-right:5px; border:1px solid rgba(0,0,0,.15); }
   #info { font:12px/1.45 ui-monospace, monospace; white-space:pre-wrap; background:var(--bg); border-radius:6px; padding:8px; min-height:60px; }
+  .tack { display:flex; align-items:center; gap:6px; width:100%; text-align:left; margin:4px 0; padding:5px 8px; font:inherit;
+          color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:6px; cursor:pointer; }
+  .tack:hover { border-color:var(--muted); }
+  .badge { display:inline-grid; place-items:center; width:20px; height:20px; border-radius:50%; color:#fff; font-weight:700; font-size:12px; flex:none; }
+  #tackList { margin:0 0 12px; }
   label { font-size:13px; display:block; margin:4px 0; }
   @media (max-width: 700px) { body { grid-template-columns:1fr; height:auto; } #map { height:70vh; } aside { border-left:0; } }
 </style></head>
@@ -64,8 +69,10 @@ _TEMPLATE = r"""<!doctype html>
   <h1>__TITLE__</h1>
   <div class="muted" id="summary"></div>
   <ul>__NOTES__</ul>
+  <div id="tackList"></div>
   <label><input type="checkbox" id="showHidden"> Show hidden tiles (faded)</label>
   <label><input type="checkbox" id="showRes" checked> Resource labels</label>
+  <label><input type="checkbox" id="showYields" checked> Yields</label>
   <label><input type="checkbox" id="showCoords"> Coordinates</label>
   <div class="legend" id="legend"></div>
   <div class="muted">Drag to pan, scroll to zoom, hover a tile.</div>
@@ -73,16 +80,20 @@ _TEMPLATE = r"""<!doctype html>
 </aside>
 <script>
 const D = __DATA__;
-const R = 20, SQ3 = Math.sqrt(3);
+const R = 32, SQ3 = Math.sqrt(3);
 const TERRAIN = { GRASS:"#8fbf5a", PLAINS:"#d9c36a", DESERT:"#ead9a6", TUNDRA:"#a59f8a", SNOW:"#eef2f4",
                   COAST:"#8cc3e6", OCEAN:"#3d78b8" };
-const FEATURE = { FOREST:"#2f6b2f", JUNGLE:"#1f8a6a", MARSH:"#5f8f8a", OASIS:"#38b0c9", REEF:"#e88fb0",
+const FEATURE = { FOREST:"#2f6b2f", JUNGLE:"#1f8a6a", MARSH:"#7fa3c4", OASIS:"#38b0c9", REEF:"#e88fb0",
                   ICE:"#ffffff", FLOODPLAINS:"#6d9e3a", FLOODPLAINS_GRASSLAND:"#6d9e3a", FLOODPLAINS_PLAINS:"#b59a3a",
                   VOLCANIC_SOIL:"#7a4a3a", VOLCANO:"#c0392b", GEOTHERMAL_FISSURE:"#d27a2c" };
 const RES_COLOR = { RESOURCECLASS_BONUS:"#4c7a2a", RESOURCECLASS_LUXURY:"#7b4bc4", RESOURCECLASS_STRATEGIC:"#c0392b", RESOURCECLASS_ARTIFACT:"#8a6d3b" };
 const TACK = { ICON_DISTRICT_CITY_CENTER:["C","#c0392b"], ICON_DISTRICT_CAMPUS:["S","#2a6fd6"] };
+// Yields in the game's order and colours: [field, letter, fill, text colour].
+const YIELDS = [["YIELD_FOOD","F","#5f9e2f","#fff"], ["YIELD_PRODUCTION","P","#c8682a","#fff"], ["YIELD_GOLD","G","#e0b42a","#222"],
+                ["YIELD_SCIENCE","S","#3b7fd0","#fff"], ["YIELD_CULTURE","C","#8e4fbf","#fff"], ["YIELD_FAITH","Fa","#e9e6dc","#222"]];
 const OWNER = ["#e6194b","#3cb44b","#4363d8","#f58231","#911eb4","#46f0f0","#f032e6","#bcf60c","#008080","#9a6324"];
 
+const TACK_YIELDS = Object.fromEntries(D.tacks.map(k => [k.x + "," + k.y, k.yields || {}]));
 const base = t => t.terrain.replace("TERRAIN_","").replace("_HILLS","").replace("_MOUNTAIN","");
 const nice = s => s && s !== "NONE" ? s.replace(/^(TERRAIN|FEATURE|RESOURCE|IMPROVEMENT|DISTRICT|BUILDING)_/,"").toLowerCase().replace(/_/g," ") : "";
 // The map wraps east-west. Start drawing at the column after the widest run of empty
@@ -109,7 +120,7 @@ const svg = document.getElementById("map");
 const world = el("g", {}, svg);
 const hiddenLayer = el("g", { opacity: 0.28, display: "none" }, world);
 const tileLayer = el("g", {}, world), riverLayer = el("g", {}, world), labelLayer = el("g", {}, world),
-      coordLayer = el("g", { display: "none" }, world), tackLayer = el("g", {}, world);
+      coordLayer = el("g", { display: "none" }, world), tackLayer = el("g", {}, world), yieldLayer = el("g", {}, world);
 
 function drawTile(t, layer, interactive) {
   const [cx, cy] = centre(t.x, t.y);
@@ -117,14 +128,14 @@ function drawTile(t, layer, interactive) {
   const fill = t.mountain ? "#6e675d" : (TERRAIN[base(t)] || "#cccccc");
   el("polygon", { points: hexPts(cx, cy, R - 0.6), fill, stroke: t.owner >= 0 ? OWNER[t.owner % OWNER.length] : "rgba(0,0,0,.18)",
                   "stroke-width": t.owner >= 0 ? 2.2 : 0.8 }, g);
-  if (t.hills) el("path", { d: `M${cx-8},${cy+7} L${cx-3},${cy} L${cx+2},${cy+7} M${cx},${cy+7} L${cx+5},${cy+1} L${cx+10},${cy+7}`,
+  if (t.hills) el("path", { d: `M${cx-11},${cy+4} L${cx-5},${cy-4} L${cx+1},${cy+4} M${cx-1},${cy+4} L${cx+5},${cy-3} L${cx+11},${cy+4}`,
                             fill: "none", stroke: "rgba(60,40,20,.55)", "stroke-width": 1.4 }, g);
-  if (t.mountain) el("path", { d: `M${cx-10},${cy+8} L${cx},${cy-9} L${cx+10},${cy+8} Z`, fill: "#4a443c", stroke: "#efece6", "stroke-width": 1 }, g);
+  if (t.mountain) el("path", { d: `M${cx-13},${cy+6} L${cx},${cy-14} L${cx+13},${cy+6} Z`, fill: "#4a443c", stroke: "#efece6", "stroke-width": 1 }, g);
   const f = (t.feature || "NONE").replace("FEATURE_", "");
-  if (f !== "NONE") el("circle", { cx: cx - 9, cy: cy - 7, r: 4.5, fill: FEATURE[f] || "#555", stroke: "rgba(0,0,0,.3)", "stroke-width": .6 }, g);
-  if (t.natural_wonder) el("circle", { cx, cy, r: 7, fill: "none", stroke: "#f1c40f", "stroke-width": 2.5 }, g);
-  if (t.is_city) el("rect", { x: cx - 6, y: cy - 6, width: 12, height: 12, fill: "#fff", stroke: "#222", "stroke-width": 1.5 }, g);
-  else if (t.district && t.district !== "NONE") el("rect", { x: cx - 5, y: cy - 5, width: 10, height: 10, fill: "#ddd", stroke: "#444" }, g);
+  if (f !== "NONE") el("circle", { cx: cx - 13, cy: cy - 12, r: 5.5, fill: FEATURE[f] || "#555", stroke: "rgba(0,0,0,.3)", "stroke-width": .6 }, g);
+  if (t.natural_wonder) el("circle", { cx, cy, r: 11, fill: "none", stroke: "#f1c40f", "stroke-width": 2.5 }, g);
+  if (t.is_city) el("rect", { x: cx - 8, y: cy - 8, width: 16, height: 16, fill: "#fff", stroke: "#222", "stroke-width": 1.5 }, g);
+  else if (t.district && t.district !== "NONE") el("rect", { x: cx - 7, y: cy - 7, width: 14, height: 14, fill: "#ddd", stroke: "#444" }, g);
   if (interactive) g.addEventListener("mouseenter", () => showInfo(t));
   return [cx, cy];
 }
@@ -144,13 +155,30 @@ function drawLabels(t) {
   const [cx, cy] = centre(t.x, t.y);
   if (t.resource && t.resource !== "NONE") {
     const cls = D.resourceClass[t.resource];
-    el("circle", { cx: cx + 9, cy: cy - 7, r: 4, fill: RES_COLOR[cls] || "#333", stroke: "#fff", "stroke-width": 1 }, tileLayer);
-    const txt = el("text", { x: cx, y: cy + 14, "text-anchor": "middle", "font-size": 6.5, fill: "#111", "paint-order": "stroke",
+    el("circle", { cx: cx + 13, cy: cy - 12, r: 5, fill: RES_COLOR[cls] || "#333", stroke: "#fff", "stroke-width": 1.2 }, tileLayer);
+    const txt = el("text", { x: cx, y: cy + 11, "text-anchor": "middle", "font-size": 7.5, fill: "#111", "paint-order": "stroke",
                              stroke: "rgba(255,255,255,.75)", "stroke-width": 2 }, labelLayer);
     txt.textContent = nice(t.resource);
   }
-  const c = el("text", { x: cx, y: cy + 3, "text-anchor": "middle", "font-size": 6, fill: "#222" }, coordLayer);
+  const c = el("text", { x: cx, y: cy - 17, "text-anchor": "middle", "font-size": 7, fill: "#222", "paint-order": "stroke",
+                         stroke: "rgba(255,255,255,.7)", "stroke-width": 2 }, coordLayer);
   c.textContent = t.x + "," + t.y;
+  // Yield badges along the bottom of the hex, non-zero yields only, then what a
+  // tacked district would add (e.g. Campus science adjacency) as "+n" badges.
+  const added = TACK_YIELDS[t.x + "," + t.y] || {};
+  const ys = YIELDS.filter(([k]) => t[k] > 0).map(([k, l, f, ink]) => [k, f, ink, String(t[k]), false])
+    .concat(YIELDS.filter(([k]) => added[k] > 0).map(([k, l, f, ink]) => [k, f, ink, "+" + added[k], true]));
+  const widths = ys.map(([, , , text]) => text.length > 1 ? 14 : 10), gap = 1.5;
+  let bx = cx - (widths.reduce((a, b) => a + b, 0) + (ys.length - 1) * gap) / 2;
+  ys.forEach(([k, fill, ink, text, plus], j) => {
+    const by = cy + 14, bw = widths[j];
+    el("rect", { x: bx, y: by, width: bw, height: 9, rx: 2, fill, stroke: plus ? "#fff" : "rgba(0,0,0,.35)",
+                 "stroke-width": plus ? 1.3 : .5 }, yieldLayer);
+    const v = el("text", { x: bx + bw / 2, y: by + 7, "text-anchor": "middle", "font-size": 7.5, "font-weight": 700, fill: ink }, yieldLayer);
+    v.textContent = text;
+    el("title", {}, v).textContent = `${nice(k.replace("YIELD_", "RESOURCE_"))}: ${text}${plus ? " from the planned district" : ""}`;
+    bx += bw + gap;
+  });
 }
 
 D.hidden.forEach(t => drawTile(t, hiddenLayer, true));
@@ -160,9 +188,11 @@ D.tiles.forEach(drawLabels);
 D.tacks.forEach(k => {
   const [cx, cy] = centre(k.x, k.y);
   const [letter, color] = TACK[k.icon] || ["?", "#333"];
-  const g = el("g", {}, tackLayer);
-  el("circle", { cx, cy: cy - 2, r: 8.5, fill: color, stroke: "#fff", "stroke-width": 2 }, g);
-  const t = el("text", { x: cx, y: cy + 1.6, "text-anchor": "middle", "font-size": 10, "font-weight": 700, fill: "#fff" }, g);
+  const g = el("g", { "pointer-events": "none" }, tackLayer);
+  el("polygon", { points: hexPts(cx, cy, R - 2.5), fill: "none", stroke: "#fff", "stroke-width": 6 }, g);
+  el("polygon", { points: hexPts(cx, cy, R - 2.5), fill: "none", stroke: color, "stroke-width": 3.5 }, g);
+  el("circle", { cx, cy: cy - 5, r: 10, fill: color, stroke: "#fff", "stroke-width": 2.5 }, g);
+  const t = el("text", { x: cx, y: cy - 0.5, "text-anchor": "middle", "font-size": 12, "font-weight": 700, fill: "#fff" }, g);
   t.textContent = letter;
   el("title", {}, g).textContent = `${k.name} (${k.x}, ${k.y})`;
 });
@@ -186,10 +216,16 @@ const legend = [["grass", TERRAIN.GRASS], ["plains", TERRAIN.PLAINS], ["desert",
   ["strategic res.", RES_COLOR.RESOURCECLASS_STRATEGIC], ["river", "#1f6fd1"], ["city tack", TACK.ICON_DISTRICT_CITY_CENTER[1]],
   ["campus tack", TACK.ICON_DISTRICT_CAMPUS[1]]];
 document.getElementById("legend").innerHTML = legend.map(([n, c]) => `<span><span class="sw" style="background:${c}"></span>${n}</span>`).join("")
-  + `<span class="muted" style="grid-column:1/-1">dot top-left: feature · ^^: hills · coloured edge: owner</span>`;
+  + `<span class="muted" style="grid-column:1/-1">dot top-left: feature · ^^: hills · coloured edge: owner</span>`
+  + [["forest", "FOREST"], ["rainforest", "JUNGLE"], ["marsh", "MARSH"], ["floodplains", "FLOODPLAINS"], ["reef", "REEF"],
+     ["oasis", "OASIS"], ["volcano", "VOLCANO"], ["volcanic soil", "VOLCANIC_SOIL"], ["geothermal", "GEOTHERMAL_FISSURE"],
+     ["ice", "ICE"]].map(([n, f]) => `<span><span class="sw" style="background:${FEATURE[f]};border-radius:50%"></span>${n}</span>`).join("")
+  + `<span style="grid-column:1/-1">yields: ` + YIELDS.map(([k, l, f, ink]) =>
+      `<span class="sw" style="background:${f};width:auto;padding:0 3px;color:${ink};font-size:10px;font-weight:700;height:auto">${l}</span>${nice(k.replace("YIELD_", "RESOURCE_"))} `).join("") + `</span>`;
 if (!D.hidden.length) document.getElementById("showHidden").parentElement.style.display = "none";
 document.getElementById("showHidden").onchange = e => hiddenLayer.setAttribute("display", e.target.checked ? "inline" : "none");
 document.getElementById("showRes").onchange = e => labelLayer.setAttribute("display", e.target.checked ? "inline" : "none");
+document.getElementById("showYields").onchange = e => yieldLayer.setAttribute("display", e.target.checked ? "inline" : "none");
 document.getElementById("showCoords").onchange = e => coordLayer.setAttribute("display", e.target.checked ? "inline" : "none");
 
 // Pan and zoom by editing the viewBox; start fitted to the shown tiles.
@@ -200,6 +236,17 @@ let vb = pts.length ? (() => {
 })() : [0, 0, D.w * SQ3 * R, D.h * 1.5 * R];
 const apply = () => svg.setAttribute("viewBox", vb.map(v => v.toFixed(1)).join(" "));
 apply();
+const tackList = document.getElementById("tackList");
+if (D.tacks.length) tackList.innerHTML = "<b>Tacks</b> <span class=muted>(click to zoom)</span>";
+D.tacks.forEach(k => {
+  const [letter, color] = TACK[k.icon] || ["?", "#333"];
+  const b = document.createElement("button");
+  b.className = "tack";
+  const yl = YIELDS.filter(([y]) => (k.yields || {})[y] > 0).map(([y]) => `+${k.yields[y]} ${nice(y.replace("YIELD_", "RESOURCE_"))}`).join(", ");
+  b.innerHTML = `<span class="badge" style="background:${color}">${letter}</span>${k.name}${yl ? " · " + yl : ""} <span class="muted">(${k.x}, ${k.y})</span>`;
+  b.onclick = () => { const [cx, cy] = centre(k.x, k.y), w = 12 * R, h = 9 * R; vb = [cx - w / 2, cy - h / 2, w, h]; apply(); };
+  tackList.appendChild(b);
+});
 svg.addEventListener("wheel", e => {
   e.preventDefault();
   const s = e.deltaY > 0 ? 1.15 : 1 / 1.15;

@@ -46,7 +46,17 @@ class GameMap:
 
     def within(self, centre, radius):
         """Revealed tiles at distance 1..radius from centre (centre excluded)."""
-        return [t for t in self if 0 < self.distance(centre, t) <= radius]
+        cx, cy = (centre["x"], centre["y"]) if isinstance(centre, dict) else centre
+        out, seen = [], set()
+        for y in range(max(0, cy - radius), min(self.height, cy + radius + 1)):
+            for x in range(cx - radius - 1, cx + radius + 2):
+                if self.wrap_x:
+                    x %= self.width
+                t = self.tiles.get((x, y))
+                if t is not None and 0 < self.distance((cx, cy), t) <= radius and t["i"] not in seen:
+                    seen.add(t["i"])
+                    out.append(t)
+        return out
 
     def city_positions(self):
         """Every known city centre: the player's own plus any other revealed city tiles."""

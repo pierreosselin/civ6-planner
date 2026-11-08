@@ -12,8 +12,9 @@ Civ VI + Map Dump mod ──(map dump inside each save)──▶ civ6_planner pl
 ## Current planner (first iteration, no optimisation yet)
 
 - **City**: a random revealed tile where a city can be founded.
-- **Campus**: within 3 tiles of that city, on the tile with the most adjacent
-  revealed mountains. Ties are broken at random.
+- **Campus**: within 3 tiles of that city, on the tile with the best science
+  adjacency from the game database (mountains, rainforest, reefs, geothermal
+  fissures, other districts including the planned city). Ties are broken at random.
 
 It decides from the latest map dump in the newest save. The autosave written at the
 start of a turn holds the dump taken at the start of the previous one, the turn you

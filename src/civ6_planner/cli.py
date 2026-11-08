@@ -8,7 +8,7 @@ import shutil
 import sys
 import time
 
-from . import dataset, dump, paths, planner, tacks, viewer
+from . import dataset, dump, paths, planner, results, tacks, viewer
 from .gamemap import GameMap
 from .rules import Rules
 
@@ -39,10 +39,11 @@ def _load(args):
         d, label = dataset.load_map(args.map), args.map
     else:
         d, label = _dump_from_save(args.save)
-    original = None
+    original = dataset.source_of(d)
     if args.mask:
         original = d
-        d = dataset.mask(d, mode=args.mask, size=args.size, centre=args.centre, seed=args.mask_seed,
+        centre = dataset.player_centre(d) if args.at_player else args.centre
+        d = dataset.mask(d, mode=args.mask, size=args.size, centre=centre, seed=args.mask_seed,
                          resources=args.resources)
         label += f" masked ({args.mask} {args.size}, seed {args.mask_seed}, centre {tuple(d['scenario']['centre'] or ())})"
     return d, label, original
@@ -56,6 +57,8 @@ def _add_map_args(p):
                         "or what the player had revealed at capture")
     p.add_argument("--size", type=int, default=60, help="blob: tiles shown; radius: hex radius (default 60)")
     p.add_argument("--centre", type=int, nargs=2, metavar=("X", "Y"), help="mask centre (default: random land)")
+    p.add_argument("--at-player", action="store_true",
+                   help="centre the mask on the middle of what the player had revealed at capture")
     p.add_argument("--mask-seed", type=int, help="seed for the mask")
     p.add_argument("--resources", choices=["all", "visible"], default="all",
                    help="mask: keep all resources, or only those visible at capture")
@@ -126,6 +129,35 @@ def cmd_view(args):
         webbrowser.open("file://" + os.path.abspath(path))
 
 
+def cmd_make_map(args):
+    """Save a masked scenario as a map in data/maps, so every run uses the same one."""
+    if not args.map or not args.mask:
+        sys.exit("make-map needs --map (a full test map) and --mask.")
+    d, label, _ = _load(args)
+    d["id"] = args.name
+    d["scenario"]["source"] = args.map
+    path = os.path.join(dataset.MAPS_DIR, f"{args.name}.json")
+    with open(path, "w") as f:
+        json.dump(d, f, separators=(",", ":"))
+    print(f"{label}: {len(d['tiles'])} tiles -> {path}")
+
+
+def cmd_results(args):
+    out = args.output or os.path.join("results", time.strftime("%Y%m%d-%H%M%S"))
+    scenarios = results.default_scenarios()
+    if args.only:
+        scenarios = [s for s in scenarios if any(k in s for k in args.only)]
+    summary = results.run(out, scenarios, seed=args.seed)
+    for r in summary["scenarios"]:
+        placed = ", ".join(f"{t['name']}{''.join(f' +{v} {k[6:].lower()}' for k, v in t['yields'].items())} ({t['x']}, {t['y']})"
+                           for t in r["tacks"]) or "nothing"
+        print(f"  {r['name']:<22} {placed}")
+    print(f"-> {os.path.join(out, 'index.html')}")
+    if args.open:
+        import webbrowser
+        webbrowser.open("file://" + os.path.abspath(os.path.join(out, "index.html")))
+
+
 def cmd_install_mod(args):
     """Copy mod/mapdump into the game's Mods folder, keeping the current plan."""
     plan = None
@@ -173,6 +205,18 @@ def main(argv=None):
     p.add_argument("-o", "--output", default="view.html")
     p.add_argument("--open", action="store_true", help="open the page in your browser")
     p.set_defaults(func=cmd_view)
+
+    p = sub.add_parser("make-map", help="save a masked scenario as a test map in data/maps")
+    _add_map_args(p)
+    p.add_argument("name", help="map name, e.g. continents-start")
+    p.set_defaults(func=cmd_make_map)
+
+    p = sub.add_parser("results", help="run the planner on every map in data/maps and write a results folder")
+    p.add_argument("-o", "--output", help="folder (default results/<date-time>)")
+    p.add_argument("--seed", type=int, default=1, help="planner seed (default 1)")
+    p.add_argument("--only", nargs="+", metavar="TEXT", help="only maps whose name contains TEXT")
+    p.add_argument("--open", action="store_true", help="open index.html in your browser")
+    p.set_defaults(func=cmd_results)
 
     p = sub.add_parser("install-mod", help="copy the mod into the game's Mods folder")
     p.set_defaults(func=cmd_install_mod)

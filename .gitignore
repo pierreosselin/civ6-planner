@@ -4,3 +4,4 @@ __pycache__/
 map.json
 *.csv
 view*.html
+results/
