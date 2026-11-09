@@ -166,7 +166,8 @@ def cmd_results(args):
     for r in summary["scenarios"]:
         counts: dict[str, int] = {}
         for t in r["tacks"]:
-            counts[t["name"]] = counts.get(t["name"], 0) + 1
+            kind = "City" if t["icon"] == planner.CITY_ICON else planner.district_name(t["icon"].removeprefix("ICON_"))
+            counts[kind] = counts.get(kind, 0) + 1
         placed = ", ".join(f"{n} {name}" for name, n in counts.items()) or "nothing"
         solver = r["solver"]
         print(f"  {r['name']:<22} score {r['score']:>8}  {solver.get('status', '')} {solver.get('seconds', '')}s  {placed}")

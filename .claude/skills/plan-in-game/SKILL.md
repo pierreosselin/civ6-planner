@@ -18,7 +18,10 @@ description: Run the planner on the user's live Civ VI game and get its tacks on
    score and HiGHS status in the notes. `--planner greedy` runs the old random stub
    (`--seed N` makes it repeatable). `watch [--planner …]` re-plans after every save.
    `clear` writes an empty plan (Ctrl+Shift+T then removes our tacks).
-   The city may be anywhere in the revealed area (no travel cost is modelled yet).
+   With the default config it plans as many new cities as fit in the revealed area
+   (anywhere: no travel cost is modelled yet), seven districts each, plus the districts
+   the player's existing cities lack. Tacks are named by city: "City C1", "Campus C1",
+   "Holy Site Rome" (C1 = best new site).
 3. **Place**: the user presses **Ctrl+Shift+T** in game. A status message appears:
    "Map Dump: tacks placed N, removed M, skipped K (your own tack there)". Works
    mid-game, no reload. Loading a save also places the current plan.

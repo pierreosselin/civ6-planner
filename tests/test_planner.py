@@ -218,6 +218,28 @@ class OptimiserTest(unittest.TestCase):
         for _, xy, _ in plan.districts:
             self.assertTrue(all(gmap.distance(xy, c) > 1 for c in plan.cities), xy)
 
+    def test_existing_city_gets_the_districts_it_lacks(self):
+        # The player's city at (5, 5) already has a Campus at (6, 5): it should get a
+        # Holy Site but no second Campus; a new city gets both.
+        gmap = full_map({(5, 5): {"is_city": 1, "owner": 0, "city": 7, "district": "DISTRICT_CITY_CENTER"},
+                         (6, 5): {"owner": 0, "city": 7, "district": "DISTRICT_CAMPUS"}})
+        gmap.own_cities = [{"id": 7, "name": "Rome", "x": 5, "y": 5}]
+        districts = ("DISTRICT_CAMPUS", "DISTRICT_HOLY_SITE")
+        plan = model.optimise(gmap, Rules(), n_cities=1, districts=districts)
+        rome = [d for d, _, c in plan.districts if c == (5, 5)]
+        new = [d for d, _, c in plan.districts if c == plan.cities[0]]
+        self.assertEqual(rome, ["DISTRICT_HOLY_SITE"])
+        self.assertEqual(sorted(new), sorted(districts))
+        self.check_score(gmap, Rules(), plan, len(plan.districts))
+        names = sorted(t.name for t in planner.to_tacks(gmap, Rules(), plan))
+        self.assertEqual(names, ["Campus C1", "City C1", "Holy Site C1", "Holy Site Rome"])
+
+    def test_no_new_city_still_plans_existing_ones(self):
+        gmap = full_map({(5, 5): {"is_city": 1, "owner": 0, "city": 1, "district": "DISTRICT_CITY_CENTER"}})
+        gmap.own_cities = [{"id": 1, "name": "Rome", "x": 5, "y": 5}]
+        plan = model.optimise(gmap, Rules(), n_cities=0, districts=CAMPUS)
+        self.assertEqual((plan.cities, [c for _, _, c in plan.districts]), ([], [(5, 5)]))
+
 
 class DistrictRulesTest(unittest.TestCase):
     def test_harbor_goes_on_coast_next_to_land(self):

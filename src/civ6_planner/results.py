@@ -61,7 +61,7 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         gmap = GameMap(d)
         p = planner.solve(gmap, rules, random.Random(seed), method, cfg)
         planned, notes = planner.to_tacks(gmap, rules, p), planner.explain(gmap, rules, p, method)
-        score, parts = model.evaluate(gmap, rules, p) if p.cities else (0.0, {})
+        score, parts = model.evaluate(gmap, rules, p) if p.cities or p.districts else (0.0, {})
         sc_dir = os.path.join(out_dir, name)
         os.makedirs(sc_dir, exist_ok=True)
         viewer.write(d, os.path.join(sc_dir, "map.html"), title=name, tacks=planned,

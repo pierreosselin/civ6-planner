@@ -86,8 +86,9 @@ def plan(gmap: GameMap, rules: Rules, rng: random.Random | None = None, method: 
 def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
     """Human-readable notes on a plan: its score, the solver's run, each placement."""
     notes = []
-    if not p.cities:
-        return [f"{method}: no revealed tile where a city can be founded ({p.info.get('status')})"]
+    if not p.cities and not p.districts:
+        return [f"{method}: nothing to place: no city site and no district spot ({p.info.get('status')})"]
+    label = city_labels(gmap, p)
     score, parts = model.evaluate(gmap, rules, p)
     notes.append(f"{method}: score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
                  f" - covered tiles {parts['lost']:.1f}")
@@ -96,11 +97,26 @@ def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
         notes.append(f"HiGHS {i['status']} in {i['seconds']}s: {i['variables']} variables, {i['rows']} rows, "
                      f"{i['city_candidates']} city sites considered")
     for xy in p.cities:
-        notes.append(f"city at {xy}: {gmap.tiles[xy]['terrain']}, site value {model.site_value(gmap, gmap.tiles[xy], p.config):.1f}")
-    for d, xy, _ in p.districts:
+        notes.append(f"city {label[xy]} at {xy}: {gmap.tiles[xy]['terrain']}, "
+                     f"site value {model.site_value(gmap, gmap.tiles[xy], p.config):.1f}")
+    for d, xy, city in p.districts:
         adj = ", ".join(f"+{v} {y[6:].lower()}" for y, v in _district_yields(gmap, rules, p, d, xy).items())
-        notes.append(f"{d[9:].lower().replace('_', ' ')} at {xy}: {gmap.tiles[xy]['terrain']}, {adj or 'no adjacency'}")
+        notes.append(f"{district_name(d).lower()} of {label[city]} at {xy}: {gmap.tiles[xy]['terrain']}, "
+                     f"{adj or 'no adjacency'}")
     return notes
+
+
+def city_labels(gmap: GameMap, p: Plan) -> dict[XY, str]:
+    """A short name per city in the plan: the player's cities by their name, new ones
+    C1, C2, … (best site first)."""
+    labels = {(c["x"], c["y"]): c.get("name") or "city" for c in gmap.own_cities}
+    labels.update({xy: f"C{i}" for i, xy in enumerate(p.cities, 1)})
+    return labels
+
+
+def district_name(district: str) -> str:
+    """DISTRICT_HOLY_SITE -> Holy Site."""
+    return district.removeprefix("DISTRICT_").replace("_", " ").title()
 
 
 def _district_yields(gmap: GameMap, rules: Rules, p: Plan, district: str, xy: XY) -> dict[str, int]:
@@ -110,8 +126,11 @@ def _district_yields(gmap: GameMap, rules: Rules, p: Plan, district: str, xy: XY
 
 
 def to_tacks(gmap: GameMap, rules: Rules, p: Plan) -> list[Tack]:
-    tacks = [Tack(x, y, CITY_ICON, "City") for x, y in p.cities]
-    for d, (x, y), _ in p.districts:
-        name = d[9:].replace("_", " ").title()
-        tacks.append(Tack(x, y, "ICON_" + d, name, _district_yields(gmap, rules, p, d, (x, y))))
+    """City tacks named "City C1", district tacks "Campus C1" (or "Campus Rome" for one
+    of the player's cities), so it's clear which city a district belongs to."""
+    label = city_labels(gmap, p)
+    tacks = [Tack(x, y, CITY_ICON, f"City {label[(x, y)]}") for x, y in p.cities]
+    for d, (x, y), city in p.districts:
+        tacks.append(Tack(x, y, "ICON_" + d, f"{district_name(d)} {label[city]}",
+                          _district_yields(gmap, rules, p, d, (x, y))))
     return tacks

@@ -4,7 +4,9 @@ Recommends Civ VI (Gathering Storm) city, district and improvement placement fro
 map the player has revealed, and shows the plan in game as map tacks. The goal is an
 optimiser that maximises yields under the game's placement rules. The MIP
 (`model.py`) places as many cities as fit (`n_cities = "max"`), each with a Campus,
-Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment and (on coast) Harbor;
+Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment and (on coast) Harbor,
+and gives the player's existing cities the ones they lack. Tacks are named per city
+("City C1", "Campus C1", "Campus Rome");
 Entertainment Complex left out on purpose. Objective: site yields + district
 adjacency − covered tiles, science and production weighted 2 for now. All test
 cases solve to optimal in ~30 s in total (full maps 10–15 s; city spacing written as

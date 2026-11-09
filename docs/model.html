@@ -40,6 +40,8 @@ Commercial Hub, Holy Site, Theater, Encampment, Harbor), optimal in 0.4–15 s o
   <tr><th>Symbol</th><th>Meaning</th><th>From</th></tr>
   <tr><td>\(T\)</td><td>Revealed tiles of the map</td><td><code>GameMap</code></td></tr>
   <tr><td>\(C \subseteq T\)</td><td>Candidate city sites: open land (not water, mountain, impassable, wonder; unowned or ours), feature allows settling, more than <code>CITY_MIN_RANGE</code> = 3 from every known city. Only the 400 best by site value \(s_c\) are kept.</td><td><code>Rules.can_found_city</code></td></tr>
+  <tr><td>\(E\)</td><td>The player's existing cities (from the dump's city list); they get the districts they don't
+  have yet. \(D_e\subseteq D\): the planned districts city \(e\) lacks (it owns no tile holding that district)</td><td><code>existing_cities</code></td></tr>
   <tr><td>\(D\)</td><td>District types to place per city: Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor (Entertainment Complex left out)</td><td><code>problem.districts</code></td></tr>
   <tr><td>\(V_d\subseteq T\)</td><td>Tiles district \(d\) may go on: no city or district yet, not a luxury or strategic resource, and
   open land; for the Harbor (<code>Districts.Coast</code>) a coast or lake tile next to land instead. The Encampment
@@ -101,7 +103,9 @@ $$ \sum_{c\in K} x_c \;\le\; 1 \qquad \forall\, K\in\mathcal{K} $$
 proving the packing for minutes; the clique form solves the full maps in 10–15 s. Pairs no clique covers (around
 unrevealed tiles) keep a pairwise row.</p>
 <p><span class="tag">(3)</span>At most one district of each type per city, and only if the city is founded · <code>district_needs_city</code></p>
-$$ \sum_{t\in R_{d,c}} z_{d,c,t} \;\le\; x_c \qquad \forall\, d\in D,\ c\in C $$
+$$ \sum_{t\in R_{d,c}} z_{d,c,t} \;\le\; x_c \quad \forall\, d\in D,\ c\in C \qquad\qquad \sum_{t\in R_{d,e}} z_{d,e,t} \;\le\; 1 \quad \forall\, e\in E,\ d\in D_e $$
+<p class="muted">Variables \(z_{d,e,t}\) for existing cities are created like those of new cities (same \(R_{d,e}\), same
+objective coefficient); their centre is already on the map, so it counts in adjacency without being planned.</p>
 <p><span class="tag">(4)</span>One thing per tile · <code>one_thing_per_tile</code></p>
 $$ x_t\,[t\in C] \;+\; \sum_{d\in D}\ \sum_{c\,:\,t\in R_{d,c}} z_{d,c,t} \;\le\; 1 \qquad \forall\, t\in T $$
 <p><span class="tag">(5)</span>No Encampment next to another planned city · <code>not_next_to_planned_city</code></p>

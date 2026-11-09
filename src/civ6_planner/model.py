@@ -105,7 +105,8 @@ class Instance:
     districts: tuple[str, ...]           # D: district types to place per city
     sites: list[XY]                      # C: candidate city tiles, best site value first
     site: dict[XY, float]                # c -> site value s_c
-    spots: dict[tuple[str, XY], list[XY]]  # (district, city) -> R_c: tiles it may go on
+    own: list[XY]                        # E: the player's existing cities (always there)
+    spots: dict[tuple[str, XY], list[XY]]  # (district, city) -> R_{d,c}: tiles it may go on
     x: dict[XY, Var] = field(default_factory=dict)                 # city c -> x[c]
     z: dict[tuple[str, XY, XY], Var] = field(default_factory=dict)  # (d, c, t) -> z[d,c,t]
 
@@ -121,15 +122,31 @@ def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, distr
     # On big maps keep the best sites only; the MIP then works on far fewer variables.
     tiles = sorted(tiles, key=lambda t: -site[(t["x"], t["y"])])[:max_city_candidates]
     sites = [(t["x"], t["y"]) for t in tiles]
+    own, built = existing_cities(gmap)
     spots = {}
     for d in districts:
-        for c in sites:
+        for c in sites + own:
+            if d in built.get(c, set()):
+                continue   # that city already has it
             spots[d, c] = [(n["x"], n["y"]) for n in gmap.within(gmap.tiles[c], rules.district_range)
                            if rules.can_place_district(gmap, n, d)
                            and not (rules.no_adjacent_city(d) and gmap.distance(c, n) == 1)]
     if n_cities == "max":
         n_cities = len(sites)
-    return Instance(gmap, rules, cfg, int(n_cities), tuple(districts), sites, {c: site[c] for c in sites}, spots)
+    return Instance(gmap, rules, cfg, int(n_cities), tuple(districts), sites, {c: site[c] for c in sites},
+                    own, spots)
+
+
+def existing_cities(gmap: GameMap) -> tuple[list[XY], dict[XY, set[str]]]:
+    """The player's cities on the map, and the districts each already has (tiles the
+    city owns holding a district)."""
+    own = [(c["x"], c["y"]) for c in gmap.own_cities if (c["x"], c["y"]) in gmap.tiles]
+    by_id = {c["id"]: (c["x"], c["y"]) for c in gmap.own_cities if (c["x"], c["y"]) in gmap.tiles}
+    built: dict[XY, set[str]] = {xy: set() for xy in own}
+    for t in gmap:
+        if t["owner"] == gmap.player and t.get("city") in by_id and t["district"] not in ("NONE", CITY_CENTER):
+            built[by_id[t["city"]]].add(t["district"])
+    return own, built
 
 
 # --- Variables ---------------------------------------------------------------
@@ -192,10 +209,14 @@ def city_spacing(m: Model, inst: Instance) -> None:
 
 def district_needs_city(m: Model, inst: Instance) -> None:
     """(3) At most one of each district per city, and only if the city is founded:
-    sum_t z[d,c,t] <= x[c]."""
+    sum_t z[d,c,t] <= x[c] for a new city, <= 1 for an existing one."""
     for (d, c), tiles in inst.spots.items():
-        if tiles:
+        if not tiles:
+            continue
+        if c in inst.x:
             m.row([(inst.z[d, c, t], 1) for t in tiles] + [(inst.x[c], -1)], hi=0)
+        else:
+            m.row([(inst.z[d, c, t], 1) for t in tiles], hi=1)
 
 
 def not_next_to_planned_city(m: Model, inst: Instance) -> None:
@@ -287,7 +308,8 @@ def build(inst: Instance) -> Model:
 
 def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: int | str | None = None,
              districts: tuple[str, ...] | None = None) -> Plan:
-    """Best plan for n_cities new cities, each with one of each district.
+    """Best plan for n_cities new cities, each with one of each district, plus the
+    districts the player's existing cities don't have yet.
     cfg: a Config (None: config/default.toml); n_cities, districts override it."""
     cfg = cfg or config.default()
     inst = prepare(gmap, rules, cfg, cfg.n_cities if n_cities is None else n_cities,
