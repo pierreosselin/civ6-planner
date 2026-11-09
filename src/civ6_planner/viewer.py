@@ -87,7 +87,10 @@ const FEATURE = { FOREST:"#2f6b2f", JUNGLE:"#1f8a6a", MARSH:"#7fa3c4", OASIS:"#3
                   ICE:"#ffffff", FLOODPLAINS:"#6d9e3a", FLOODPLAINS_GRASSLAND:"#6d9e3a", FLOODPLAINS_PLAINS:"#b59a3a",
                   VOLCANIC_SOIL:"#7a4a3a", VOLCANO:"#c0392b", GEOTHERMAL_FISSURE:"#d27a2c" };
 const RES_COLOR = { RESOURCECLASS_BONUS:"#4c7a2a", RESOURCECLASS_LUXURY:"#7b4bc4", RESOURCECLASS_STRATEGIC:"#c0392b", RESOURCECLASS_ARTIFACT:"#8a6d3b" };
-const TACK = { ICON_DISTRICT_CITY_CENTER:["C","#c0392b"], ICON_DISTRICT_CAMPUS:["S","#2a6fd6"] };
+const TACK = { ICON_DISTRICT_CITY_CENTER:["C","#c0392b"], ICON_DISTRICT_CAMPUS:["S","#2a6fd6"],
+  ICON_DISTRICT_INDUSTRIAL_ZONE:["P","#d35400"], ICON_DISTRICT_COMMERCIAL_HUB:["G","#b8900b"],
+  ICON_DISTRICT_HOLY_SITE:["F","#7f8c8d"], ICON_DISTRICT_THEATER:["T","#8e44ad"],
+  ICON_DISTRICT_ENCAMPMENT:["E","#6d4c41"], ICON_DISTRICT_HARBOR:["H","#16a085"] };
 // Yields in the game's order and colours: [field, letter, fill, text colour].
 const YIELDS = [["YIELD_FOOD","F","#5f9e2f","#fff"], ["YIELD_PRODUCTION","P","#c8682a","#fff"], ["YIELD_GOLD","G","#e0b42a","#222"],
                 ["YIELD_SCIENCE","S","#3b7fd0","#fff"], ["YIELD_CULTURE","C","#8e4fbf","#fff"], ["YIELD_FAITH","Fa","#e9e6dc","#222"]];
@@ -213,8 +216,11 @@ document.getElementById("summary").textContent =
 const legend = [["grass", TERRAIN.GRASS], ["plains", TERRAIN.PLAINS], ["desert", TERRAIN.DESERT], ["tundra", TERRAIN.TUNDRA],
   ["snow", TERRAIN.SNOW], ["coast", TERRAIN.COAST], ["ocean", TERRAIN.OCEAN], ["mountain", "#6e675d"],
   ["bonus res.", RES_COLOR.RESOURCECLASS_BONUS], ["luxury res.", RES_COLOR.RESOURCECLASS_LUXURY],
-  ["strategic res.", RES_COLOR.RESOURCECLASS_STRATEGIC], ["river", "#1f6fd1"], ["city tack", TACK.ICON_DISTRICT_CITY_CENTER[1]],
-  ["campus tack", TACK.ICON_DISTRICT_CAMPUS[1]]];
+  ["strategic res.", RES_COLOR.RESOURCECLASS_STRATEGIC], ["river", "#1f6fd1"],
+  ["C city", TACK.ICON_DISTRICT_CITY_CENTER[1]], ["S campus", TACK.ICON_DISTRICT_CAMPUS[1]],
+  ["P industrial zone", TACK.ICON_DISTRICT_INDUSTRIAL_ZONE[1]], ["G commercial hub", TACK.ICON_DISTRICT_COMMERCIAL_HUB[1]],
+  ["F holy site", TACK.ICON_DISTRICT_HOLY_SITE[1]], ["T theater", TACK.ICON_DISTRICT_THEATER[1]],
+  ["E encampment", TACK.ICON_DISTRICT_ENCAMPMENT[1]], ["H harbor", TACK.ICON_DISTRICT_HARBOR[1]]];
 document.getElementById("legend").innerHTML = legend.map(([n, c]) => `<span><span class="sw" style="background:${c}"></span>${n}</span>`).join("")
   + `<span class="muted" style="grid-column:1/-1">dot top-left: feature · ^^: hills · coloured edge: owner</span>`
   + [["forest", "FOREST"], ["rainforest", "JUNGLE"], ["marsh", "MARSH"], ["floodplains", "FLOODPLAINS"], ["reef", "REEF"],

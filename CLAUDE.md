@@ -2,9 +2,13 @@
 
 Recommends Civ VI (Gathering Storm) city, district and improvement placement from the
 map the player has revealed, and shows the plan in game as map tacks. The goal is an
-optimiser that maximises yields under the game's placement rules. First MIP
-backbone (`model.py`): one city and its Campus, maximising a placeholder objective
-(site yields + Campus adjacency − covered tile). Kept simple on purpose: adjacency
+optimiser that maximises yields under the game's placement rules. The MIP
+(`model.py`) places as many cities as fit (`n_cities = "max"`), each with a Campus,
+Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment and (on coast) Harbor;
+Entertainment Complex left out on purpose. Objective: site yields + district
+adjacency − covered tiles, science and production weighted 2 for now. All test
+cases solve to optimal in ~30 s in total (full maps 10–15 s; city spacing written as
+clique constraints, which made that possible). Kept simple on purpose: adjacency
 between *planned* districts (other than a district's own city centre) isn't
 modelled yet, because the coupling constraints made HiGHS slow.
 

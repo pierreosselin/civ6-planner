@@ -113,9 +113,9 @@ class Instance:
 Step = Callable[[Model, "Instance"], None]   # a variable, constraint or objective function
 
 
-def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int, districts: tuple[str, ...],
+def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, districts: tuple[str, ...],
             max_city_candidates: int) -> Instance:
-    """Candidate sets and site values; no variables yet."""
+    """Candidate sets and site values; no variables yet. n_cities "max": as many as fit."""
     tiles = [t for t in gmap if rules.can_found_city(gmap, t)]
     site = {(t["x"], t["y"]): site_value(gmap, t, cfg) for t in tiles}
     # On big maps keep the best sites only; the MIP then works on far fewer variables.
@@ -125,8 +125,11 @@ def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int, districts: 
     for d in districts:
         for c in sites:
             spots[d, c] = [(n["x"], n["y"]) for n in gmap.within(gmap.tiles[c], rules.district_range)
-                           if rules.can_place_district(gmap, n)]
-    return Instance(gmap, rules, cfg, n_cities, tuple(districts), sites, {c: site[c] for c in sites}, spots)
+                           if rules.can_place_district(gmap, n, d)
+                           and not (rules.no_adjacent_city(d) and gmap.distance(c, n) == 1)]
+    if n_cities == "max":
+        n_cities = len(sites)
+    return Instance(gmap, rules, cfg, int(n_cities), tuple(districts), sites, {c: site[c] for c in sites}, spots)
 
 
 # --- Variables ---------------------------------------------------------------
@@ -152,14 +155,39 @@ def max_cities(m: Model, inst: Instance) -> None:
 
 
 def city_spacing(m: Model, inst: Instance) -> None:
-    """(2) Cities too close to each other exclude each other: x[a] + x[b] <= 1."""
+    """(2) Cities too close to each other exclude each other.
+
+    Pairwise x[a] + x[b] <= 1 is a weak relaxation when many cities fit, so it is
+    written with cliques: for every triangle of three touching tiles, the candidates
+    on or next to it are all within 3 of each other (max one city among them):
+        sum_{c in K} x[c] <= 1
+    These cover every conflicting pair whose shortest path is revealed; the pairs
+    left (around unrevealed tiles) keep a pairwise row."""
     if inst.n_cities < 2:
         return  # one city can't clash with itself
-    for a in inst.sites:
-        for n in inst.gmap.within(inst.gmap.tiles[a], inst.rules.city_min_range):
-            b = (n["x"], n["y"])
-            if b in inst.x and a < b:
-                m.row({inst.x[a]: 1, inst.x[b]: 1}, hi=1)
+    gmap, limit = inst.gmap, inst.rules.city_min_range
+    covered: set[tuple[XY, XY]] = set()
+    seen: set[frozenset[XY]] = set()
+    for t in gmap:
+        ring = gmap.neighbours(t)
+        for a in ring:
+            for b in ring:
+                tri = frozenset({(t["x"], t["y"]), (a["x"], a["y"]), (b["x"], b["y"])})
+                if len(tri) < 3 or tri in seen or gmap.distance(a, b) != 1:
+                    continue
+                seen.add(tri)
+                clique = sorted({xy for v in tri for xy in
+                                 [v] + [(n["x"], n["y"]) for n in gmap.neighbours(gmap.tiles[v])]
+                                 if xy in inst.x})
+                if len(clique) < 2 or any(gmap.distance(p, q) > limit for p in clique for q in clique):
+                    continue
+                m.row([(inst.x[c], 1) for c in clique], hi=1)
+                covered.update((p, q) for p in clique for q in clique if p < q)
+    for c in inst.sites:
+        for n in gmap.within(gmap.tiles[c], limit):
+            other = (n["x"], n["y"])
+            if other in inst.x and c < other and (c, other) not in covered:
+                m.row({inst.x[c]: 1, inst.x[other]: 1}, hi=1)
 
 
 def district_needs_city(m: Model, inst: Instance) -> None:
@@ -168,6 +196,19 @@ def district_needs_city(m: Model, inst: Instance) -> None:
     for (d, c), tiles in inst.spots.items():
         if tiles:
             m.row([(inst.z[d, c, t], 1) for t in tiles] + [(inst.x[c], -1)], hi=0)
+
+
+def not_next_to_planned_city(m: Model, inst: Instance) -> None:
+    """(5) Districts that may not touch a city centre (Encampment) stay off tiles next to
+    another planned city: z[d,c,t] + x[c'] <= 1 for c' next to t. (Its own city c is
+    already left out of R_c.)"""
+    for (d, c, t), v in inst.z.items():
+        if not inst.rules.no_adjacent_city(d):
+            continue
+        for n in inst.gmap.neighbours(inst.gmap.tiles[t]):
+            other = (n["x"], n["y"])
+            if other != c and other in inst.x:
+                m.row({v: 1, inst.x[other]: 1}, hi=1)
 
 
 def one_thing_per_tile(m: Model, inst: Instance) -> None:
@@ -226,6 +267,7 @@ CONSTRAINTS: list[Step] = [
     city_spacing,
     district_needs_city,
     one_thing_per_tile,
+    not_next_to_planned_city,
 ]
 OBJECTIVE: list[Step] = [
     site_term,
@@ -243,7 +285,7 @@ def build(inst: Instance) -> Model:
     return m
 
 
-def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: int | None = None,
+def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: int | str | None = None,
              districts: tuple[str, ...] | None = None) -> Plan:
     """Best plan for n_cities new cities, each with one of each district.
     cfg: a Config (None: config/default.toml); n_cities, districts override it."""

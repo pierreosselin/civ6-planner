@@ -2,8 +2,16 @@
 # values it changes; everything else comes from here.
 
 [problem]
-n_cities = 1                       # new cities to found
-districts = ["DISTRICT_CAMPUS"]    # districts per city (game type names)
+n_cities = "max"                   # new cities to found: a number, or "max" (as many as fit)
+districts = [                      # districts per city (game type names)
+    "DISTRICT_CAMPUS",
+    "DISTRICT_INDUSTRIAL_ZONE",
+    "DISTRICT_COMMERCIAL_HUB",
+    "DISTRICT_HOLY_SITE",
+    "DISTRICT_THEATER",
+    "DISTRICT_ENCAMPMENT",
+    "DISTRICT_HARBOR",             # coast tiles only; cities without one simply get none
+]
 max_city_candidates = 400          # keep only the best city sites by site value
 
 [objective]
@@ -14,10 +22,10 @@ district_bonus = 10.0              # per district: build them whenever possible
 
 [objective.weights]                # value of one unit of each yield (placeholders)
 food = 1.0
-production = 1.0
+production = 2.0                   # science and production first, for now
 gold = 0.5
-science = 1.0
-culture = 1.0
+science = 2.0
+culture = 0.5
 faith = 0.5
 
 [solver]

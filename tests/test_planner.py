@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import random
 import tempfile
@@ -39,6 +40,15 @@ def make_map(tiles):
 
 
 MOUNTAIN = {"mountain": 1, "terrain": "TERRAIN_PLAINS_MOUNTAIN"}
+
+
+def varied_map(seed=0):
+    """A 10x12 island with random food/production: unlike a flat map that wraps around,
+    layouts don't all tie, as on real maps (those are the solver's worst case)."""
+    rng = random.Random(seed)
+    sea = {"water": 1, "terrain": "TERRAIN_OCEAN"}
+    return full_map({(x, y): yields(food=rng.randint(0, 3), prod=rng.randint(0, 2)) if 2 <= x < 12 else dict(sea)
+                     for x in range(W) for y in range(H)})
 
 
 def full_map(special=None):
@@ -131,6 +141,9 @@ class SolverTest(unittest.TestCase):
         self.assertEqual((sol.status, sol["a"], sol["b"], sol["c"], sol.objective), ("optimal", 0, 1, 1, 7))
 
 
+CAMPUS = ("DISTRICT_CAMPUS",)
+
+
 class OptimiserTest(unittest.TestCase):
     def check_score(self, gmap, rules, plan, n_districts):
         """The MIP's own objective must equal evaluate() plus the placement bonuses."""
@@ -149,7 +162,7 @@ class OptimiserTest(unittest.TestCase):
             special[(n["x"], n["y"])] = dict(MOUNTAIN)
         gmap = full_map(special)
         rules = Rules()
-        plan = model.optimise(gmap, rules)
+        plan = model.optimise(gmap, rules, n_cities=1, districts=CAMPUS)
         self.assertEqual(plan.info["status"], "optimal")
         self.assertEqual(len(plan.cities), 1)
         [(d, xy, city)] = plan.districts
@@ -162,7 +175,7 @@ class OptimiserTest(unittest.TestCase):
         # gets +1 from "+1 per 2 districts"; everything else is flat.
         gmap = full_map({(10, 6): {"district": "DISTRICT_HOLY_SITE"}})
         rules = Rules()
-        plan = model.optimise(gmap, rules)
+        plan = model.optimise(gmap, rules, n_cities=1, districts=CAMPUS)
         [(d, xy, city)] = plan.districts
         planned = {city: model.CITY_CENTER}
         self.assertEqual(rules.adjacency(gmap, gmap.tiles[xy], d, planned), {"YIELD_SCIENCE": 1})
@@ -180,9 +193,65 @@ class OptimiserTest(unittest.TestCase):
     def test_greedy_and_mip_tacks(self):
         gmap = full_map({(10, 6): MOUNTAIN})
         for method in planner.METHODS:
-            tacks, notes = planner.plan(gmap, Rules(), random.Random(0), method)
+            cfg = dataclasses.replace(config.default(), n_cities=1, districts=CAMPUS)
+            tacks, notes = planner.plan(gmap, Rules(), random.Random(0), method, cfg)
             self.assertEqual([t.icon for t in tacks], [planner.CITY_ICON, planner.CAMPUS_ICON], method)
             self.assertTrue(notes[0].startswith(method), notes)
+
+    def test_as_many_cities_as_fit(self):
+        # "max" packs cities more than 3 apart and gives each its district.
+        gmap = varied_map()
+        rules = Rules()
+        plan = model.optimise(gmap, rules, n_cities="max", districts=CAMPUS)
+        self.assertEqual(plan.info["status"], "optimal")
+        self.assertGreater(len(plan.cities), 6)
+        self.assertEqual(len(plan.districts), len(plan.cities))
+        for i, a in enumerate(plan.cities):
+            for b in plan.cities[i + 1:]:
+                self.assertGreater(gmap.distance(a, b), rules.city_min_range)
+
+    def test_encampment_never_touches_a_planned_city(self):
+        gmap = varied_map(1)
+        rules = Rules()
+        plan = model.optimise(gmap, rules, n_cities="max", districts=("DISTRICT_ENCAMPMENT",))
+        self.assertEqual(len(plan.districts), len(plan.cities))
+        for _, xy, _ in plan.districts:
+            self.assertTrue(all(gmap.distance(xy, c) > 1 for c in plan.cities), xy)
+
+
+class DistrictRulesTest(unittest.TestCase):
+    def test_harbor_goes_on_coast_next_to_land(self):
+        coast = {"water": 1, "terrain": "TERRAIN_COAST"}
+        special = {(x, y): dict(coast) for x in range(W) for y in range(6, H)}   # north half is sea
+        special.update({(x, y): {"water": 1, "terrain": "TERRAIN_OCEAN"} for x in range(W) for y in range(9, H)})
+        gmap = full_map(special)
+        rules = Rules()
+        ok = {(t["x"], t["y"]) for t in gmap if rules.can_place_district(gmap, t, "DISTRICT_HARBOR")}
+        self.assertEqual(ok, {(x, 6) for x in range(W)})          # coast touching land only
+        self.assertFalse(rules.can_place_district(gmap, gmap.tiles[(3, 6)], "DISTRICT_CAMPUS"))
+        self.assertFalse(rules.can_place_district(gmap, gmap.tiles[(3, 3)], "DISTRICT_HARBOR"))
+
+    def test_encampment_not_next_to_existing_city(self):
+        gmap = full_map({(5, 5): {"is_city": 1}})
+        rules = Rules()
+        self.assertFalse(rules.can_place_district(gmap, gmap.tiles[(6, 5)], "DISTRICT_ENCAMPMENT"))
+        self.assertTrue(rules.can_place_district(gmap, gmap.tiles[(7, 5)], "DISTRICT_ENCAMPMENT"))
+        self.assertTrue(rules.can_place_district(gmap, gmap.tiles[(6, 5)], "DISTRICT_CAMPUS"))
+
+    def test_river_sea_resource_and_strategic_adjacency(self):
+        rules = Rules(resource_class={"RESOURCE_IRON": "RESOURCECLASS_STRATEGIC", "RESOURCE_FISH": "RESOURCECLASS_BONUS"},
+                      adjacencies={
+                          "DISTRICT_COMMERCIAL_HUB": [{"yield": "YIELD_GOLD", "change": 2, "tiles": 1, "river": True}],
+                          "DISTRICT_HARBOR": [{"yield": "YIELD_GOLD", "change": 1, "tiles": 1, "sea_resource": True}],
+                          "DISTRICT_INDUSTRIAL_ZONE": [{"yield": "YIELD_PRODUCTION", "change": 1, "tiles": 1,
+                                                        "resource_class": "RESOURCECLASS_STRATEGIC"}]})
+        gmap = full_map({(5, 5): {"river": 1}, (6, 5): {"resource": "RESOURCE_IRON"},
+                         (4, 5): {"water": 1, "terrain": "TERRAIN_COAST", "resource": "RESOURCE_FISH"}})
+        t = gmap.tiles[(5, 5)]
+        self.assertEqual(rules.adjacency(gmap, t, "DISTRICT_COMMERCIAL_HUB"), {"YIELD_GOLD": 2})
+        self.assertEqual(rules.adjacency(gmap, t, "DISTRICT_HARBOR"), {"YIELD_GOLD": 1})
+        self.assertEqual(rules.adjacency(gmap, t, "DISTRICT_INDUSTRIAL_ZONE"), {"YIELD_PRODUCTION": 1})
+        self.assertEqual(rules.adjacency(gmap, gmap.tiles[(9, 9)], "DISTRICT_COMMERCIAL_HUB"), {})
 
 
 class MaskTest(unittest.TestCase):
@@ -283,8 +352,8 @@ class ConfigTest(unittest.TestCase):
         gmap = full_map({(x, y): yields(food=1) for x in range(20) for y in range(12)})
         rules = Rules()
         cfg = config.load(self.write("[objective.weights]\nfood = 2.0\n"))
-        a = model.optimise(gmap, rules, districts=())
-        b = model.optimise(gmap, rules, cfg, districts=())
+        a = model.optimise(gmap, rules, n_cities=1, districts=())
+        b = model.optimise(gmap, rules, cfg, n_cities=1, districts=())
         self.assertAlmostEqual(model.evaluate(gmap, rules, b)[0], 2 * model.evaluate(gmap, rules, a)[0])
 
 

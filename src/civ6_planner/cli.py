@@ -164,9 +164,12 @@ def cmd_results(args):
     summary = results.run(out, scenarios, seed=args.seed, method=args.planner, config_file=args.config,
                           echo=None if args.quiet else print)
     for r in summary["scenarios"]:
-        placed = ", ".join(f"{t['name']}{''.join(f' +{v} {k[6:].lower()}' for k, v in t['yields'].items())} ({t['x']}, {t['y']})"
-                           for t in r["tacks"]) or "nothing"
-        print(f"  {r['name']:<22} score {r['score']:>6}  {placed}")
+        counts: dict[str, int] = {}
+        for t in r["tacks"]:
+            counts[t["name"]] = counts.get(t["name"], 0) + 1
+        placed = ", ".join(f"{n} {name}" for name, n in counts.items()) or "nothing"
+        solver = r["solver"]
+        print(f"  {r['name']:<22} score {r['score']:>8}  {solver.get('status', '')} {solver.get('seconds', '')}s  {placed}")
     print(f"-> {os.path.join(out, 'index.html')}")
     if args.open:
         import webbrowser

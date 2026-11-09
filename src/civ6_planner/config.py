@@ -23,7 +23,7 @@ YIELDS = ["YIELD_FOOD", "YIELD_PRODUCTION", "YIELD_GOLD", "YIELD_SCIENCE", "YIEL
 
 @dataclass
 class Config:
-    n_cities: int
+    n_cities: int | str            # a number, or "max": as many as fit
     districts: tuple[str, ...]     # district types, e.g. DISTRICT_CAMPUS
     max_city_candidates: int
     site_radius: int
