@@ -4,14 +4,23 @@ The game writes its full gameplay database to Cache/DebugGameplay.sqlite each ti
 game loads, so it reflects the expansions and mods in use. Rules that are engine
 behaviour rather than data are written out here and marked as such.
 """
+from __future__ import annotations
+
 import os
 import sqlite3
 
 from . import paths
+from typing import Any
+
+from .gamemap import XY, GameMap, Tile
+
+# One adjacency rule: {yield, change, tiles, and one of terrain, feature, district,
+# other_district}; it gives `change` of `yield` per `tiles` matching neighbours.
+AdjacencyRule = dict[str, Any]
 
 
 # Campus adjacency as in the Gathering Storm database, for when it can't be read.
-DEFAULT_ADJACENCIES = {"DISTRICT_CAMPUS": [
+DEFAULT_ADJACENCIES: dict[str, list[AdjacencyRule]] = {"DISTRICT_CAMPUS": [
     {"yield": "YIELD_SCIENCE", "change": 1, "tiles": 1, "terrain": f"TERRAIN_{t}_MOUNTAIN"}
     for t in ("GRASS", "PLAINS", "DESERT", "TUNDRA", "SNOW")] + [
     {"yield": "YIELD_SCIENCE", "change": 1, "tiles": 2, "other_district": True},
@@ -22,8 +31,9 @@ DEFAULT_ADJACENCIES = {"DISTRICT_CAMPUS": [
 
 
 class Rules:
-    def __init__(self, city_min_range=3, district_range=3, resource_class=None, no_settle_features=(),
-                 adjacencies=None):
+    def __init__(self, city_min_range: int = 3, district_range: int = 3,
+                 resource_class: dict[str, str] | None = None, no_settle_features: tuple[str, ...] = (),
+                 adjacencies: dict[str, list[AdjacencyRule]] | None = None):
         # A new city centre must be more than city_min_range tiles from any other.
         self.city_min_range = city_min_range
         # Districts go within district_range tiles of their city centre.
@@ -35,7 +45,7 @@ class Rules:
         self.adjacencies = DEFAULT_ADJACENCIES if adjacencies is None else adjacencies
 
     @classmethod
-    def from_game(cls, db_path=paths.GAMEPLAY_DB):
+    def from_game(cls, db_path: str = paths.GAMEPLAY_DB) -> Rules:
         if not os.path.exists(db_path):
             raise FileNotFoundError(f"{db_path} not found; load a game once so Civ VI writes it.")
         db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -44,18 +54,18 @@ class Rules:
             return cls(
                 city_min_range=int(params.get("CITY_MIN_RANGE", 3)),
                 district_range=int(params.get("CITY_MAX_BUY_PLOT_RANGE", 3)),
-                resource_class=db.execute("SELECT ResourceType, ResourceClassType FROM Resources"),
-                no_settle_features=[f for (f,) in db.execute("SELECT FeatureType FROM Features WHERE Settlement = 0")],
+                resource_class=dict(db.execute("SELECT ResourceType, ResourceClassType FROM Resources")),
+                no_settle_features=tuple(f for (f,) in db.execute("SELECT FeatureType FROM Features WHERE Settlement = 0")),
                 adjacencies=cls._read_adjacencies(db),
             )
         finally:
             db.close()
 
     @staticmethod
-    def _read_adjacencies(db):
+    def _read_adjacencies(db: sqlite3.Connection) -> dict[str, list[AdjacencyRule]]:
         """The simple adjacency rules (by neighbouring terrain, feature or district).
         Rules needing a tech/civic, rivers, wonders or resources aren't modelled yet."""
-        out = {}
+        out: dict[str, list[AdjacencyRule]] = {}
         rows = db.execute("""
             SELECT d.DistrictType, a.YieldType, a.YieldChange, a.TilesRequired, a.OtherDistrictAdjacent,
                    a.AdjacentTerrain, a.AdjacentFeature, a.AdjacentDistrict
@@ -79,12 +89,13 @@ class Rules:
             out.setdefault(district, []).append(rule)
         return out
 
-    def adjacency(self, gmap, tile, district, planned=None):
+    def adjacency(self, gmap: GameMap, tile: Tile, district: str,
+                  planned: dict[XY, str] | None = None) -> dict[str, int]:
         """{yield: bonus} the district would get on `tile`. planned: {(x, y): district
         type} of districts the plan adds (a planned city counts as DISTRICT_CITY_CENTER)."""
         planned = planned or {}
 
-        def district_at(n):
+        def district_at(n: Tile) -> str:
             if (n["x"], n["y"]) in planned:
                 return planned[(n["x"], n["y"])]
             if n.get("is_city"):
@@ -92,7 +103,7 @@ class Rules:
             return n.get("district", "NONE")
 
         neighbours = gmap.neighbours(tile)
-        out = {}
+        out: dict[str, int] = {}
         for rule in self.adjacencies.get(district, []):
             if rule.get("other_district"):
                 count = sum(1 for n in neighbours if district_at(n) != "NONE")
@@ -108,19 +119,19 @@ class Rules:
         return out
 
     @staticmethod
-    def _open_land(tile, player):
+    def _open_land(tile: Tile, player: int) -> bool:
         """Land that nothing blocks: not water, mountain, impassable or a wonder,
         and unowned or owned by the player."""
         return not (tile["water"] or tile["mountain"] or tile["impassable"]
                     or tile["natural_wonder"] or tile["wonder"] != "NONE") \
             and tile["owner"] in (-1, player)
 
-    def can_found_city(self, gmap, tile):
+    def can_found_city(self, gmap: GameMap, tile: Tile) -> bool:
         if not self._open_land(tile, gmap.player) or tile["feature"] in self.no_settle_features:
             return False
         return all(gmap.distance(tile, c) > self.city_min_range for c in gmap.city_positions())
 
-    def can_place_district(self, gmap, tile):
+    def can_place_district(self, gmap: GameMap, tile: Tile) -> bool:
         """Generic district tile (Campus has no terrain restrictions of its own).
 
         Engine rule, not in the database: districts can't go on luxury or strategic

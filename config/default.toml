@@ -1,0 +1,27 @@
+# Default planner settings. Run with another file via `--config FILE`: it only needs the
+# values it changes; everything else comes from here.
+
+[problem]
+n_cities = 1                       # new cities to found
+districts = ["DISTRICT_CAMPUS"]    # districts per city (game type names)
+max_city_candidates = 400          # keep only the best city sites by site value
+
+[objective]
+site_radius = 2                    # tiles counted in a city's site value
+loss_factor = 0.5                  # share of a covered tile's yields counted as lost
+city_bonus = 100.0                 # per city: found the cities whenever possible
+district_bonus = 10.0              # per district: build them whenever possible
+
+[objective.weights]                # value of one unit of each yield (placeholders)
+food = 1.0
+production = 1.0
+gold = 0.5
+science = 1.0
+culture = 1.0
+faith = 0.5
+
+[solver]
+# Passed to HiGHS through scipy.optimize.milp(options=...). Also accepted:
+# presolve = true, node_limit = 1000. (disp is always on: the log is captured.)
+time_limit = 60.0                  # seconds
+mip_rel_gap = 1e-6                 # stop when within this relative gap of optimal

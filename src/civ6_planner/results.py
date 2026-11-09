@@ -2,26 +2,28 @@
 read and checked on the map without opening Civ VI.
 
     results/<run>/
-      index.html             every scenario: tacks placed, notes, link to its map
+      index.html             every test case: tacks placed, notes, link to its map
       summary.json           the same, for comparing runs
-      <map>/decisions.json   one per map in data/maps
+      <case>/decisions.json  one folder per test case data/<case>/
+      <case>/config.toml     the complete settings used for it (rerun with --config)
       <map>/map.html         the map with the tacks drawn
       <map>/optimisation.log model settings, the solver's log, the decisions
 """
+from __future__ import annotations
+
 import html
 import json
 import os
 import random
+from typing import Any, Callable
 
-from . import dataset, model, planner, viewer
+from . import config, dataset, model, planner, viewer
 from .gamemap import GameMap
+from .model import Plan
+from .planner import Tack
+from .rules import Rules
 
-def default_scenarios():
-    """Every map in data/maps: the full captures and the masked maps cut from them."""
-    return sorted(f[:-5] for f in os.listdir(dataset.MAPS_DIR) if f.endswith(".json"))
-
-
-def describe(d):
+def describe(d: dict[str, Any]) -> str:
     sc = d.get("scenario")
     if not sc:
         return "whole map"
@@ -34,23 +36,30 @@ def describe(d):
     return what
 
 
-def _tack_record(gmap, t):
+def _tack_record(gmap: GameMap, t: Tack) -> dict[str, Any]:
     tile = gmap.tiles.get((t.x, t.y), {})
     return {"x": t.x, "y": t.y, "icon": t.icon, "name": t.name, "yields": t.yields,
             "tile": {k: tile.get(k) for k in ("terrain", "feature", "resource", "hills", "river", "coastal_land")}}
 
 
-def run(out_dir, scenarios=None, seed=1, rules=None, method="mip"):
-    """Plan every scenario and write the folder. Returns the summary dict."""
-    from .rules import Rules
+def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: Rules | None = None,
+        method: str = "mip", echo: Callable[[str], Any] | None = None,
+        config_file: str | None = None) -> dict[str, Any]:
+    """Plan every test case and write the folder. Returns the summary dict.
+    Settings per case: config/default.toml, the case's config.toml, then config_file.
+
+    echo: a function such as print, called with each map's optimisation log as it
+    finishes (None: silent)."""
     rules = rules or Rules.from_game()
     os.makedirs(out_dir, exist_ok=True)
-    summary = {"seed": seed, "method": method, "scenarios": []}
-    for name in scenarios or default_scenarios():
+    records: list[dict[str, Any]] = []
+    summary = {"seed": seed, "method": method, "config_file": config_file, "scenarios": records}
+    for name in scenarios or dataset.cases():
         d = dataset.load_map(name)
+        cfg = config.load(dataset.config_path(name), config_file)
         original = dataset.source_of(d)
         gmap = GameMap(d)
-        p = planner.solve(gmap, rules, random.Random(seed), method)
+        p = planner.solve(gmap, rules, random.Random(seed), method, cfg)
         planned, notes = planner.to_tacks(gmap, rules, p), planner.explain(gmap, rules, p, method)
         score, parts = model.evaluate(gmap, rules, p) if p.cities else (0.0, {})
         sc_dir = os.path.join(out_dir, name)
@@ -58,14 +67,20 @@ def run(out_dir, scenarios=None, seed=1, rules=None, method="mip"):
         viewer.write(d, os.path.join(sc_dir, "map.html"), title=name, tacks=planned,
                      notes=notes, hidden_from=original)
         record = {"name": name, "description": describe(d), "tiles": len(gmap),
-                  "score": round(score, 2), "score_parts": parts, "solver": p.info,
+                  "score": round(score, 2), "score_parts": parts,
+                  "config": {"files": cfg.sources, **cfg.raw}, "solver": p.info,
                   "tacks": [_tack_record(gmap, t) for t in planned], "notes": notes,
                   "map": f"{name}/map.html", "log": f"{name}/optimisation.log"}
         with open(os.path.join(sc_dir, "decisions.json"), "w") as f:
             json.dump(record, f, indent=1)
+        with open(os.path.join(sc_dir, "config.toml"), "w") as f:
+            f.write(config.to_toml(cfg))
+        log = _log(name, d, method, seed, p, record)
         with open(os.path.join(sc_dir, "optimisation.log"), "w") as f:
-            f.write(_log(name, d, method, seed, p, record))
-        summary["scenarios"].append(record)
+            f.write(log)
+        if echo:
+            echo(log)
+        records.append(record)
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=1)
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
@@ -73,15 +88,21 @@ def run(out_dir, scenarios=None, seed=1, rules=None, method="mip"):
     return summary
 
 
-def _log(name, d, method, seed, p, record):
+def _log(name: str, d: dict[str, Any], method: str, seed: int, p: Plan, record: dict[str, Any]) -> str:
     """The run in text: model settings, the solver's own log, then the decisions."""
     rule = "=" * 72
     lines = [f"{name}: {describe(d)}, {record['tiles']} tiles", f"planner: {method}, seed {seed}", ""]
     if method == "mip":
-        lines += ["Model settings (model.py)",
-                  f"  weights        {model.WEIGHTS}",
-                  f"  site radius    {model.SITE_RADIUS}   loss factor {model.LOSS_FACTOR}"
-                  f"   city bonus {model.CITY_BONUS}   district bonus {model.DISTRICT_BONUS}",
+        c = p.config
+        lines += ["Model settings (" + " + ".join(c.sources) + ")",
+                  f"  problem        {c.n_cities} cities, districts {', '.join(c.districts)},"
+                  f" best {c.max_city_candidates} city sites",
+                  f"  weights        " + ", ".join(f"{k[6:].lower()} {v:g}" for k, v in c.weights.items()),
+                  f"  site radius    {c.site_radius}   loss factor {c.loss_factor}"
+                  f"   city bonus {c.city_bonus}   district bonus {c.district_bonus}",
+                  f"  solver         " + ", ".join(f"{k} {v}" for k, v in c.solver.items()),
+                  f"  constraints    {', '.join(p.model.get('constraints', []))}",
+                  f"  objective      {', '.join(p.model.get('objective', []))}",
                   f"  size           " + ", ".join(f"{k} {v}" for k, v in p.info.items() if k != "objective"),
                   "", rule, "HiGHS log (it minimises -objective; objective = score + bonuses)", rule,
                   p.log.rstrip(), rule, ""]
@@ -91,7 +112,7 @@ def _log(name, d, method, seed, p, record):
     return "\n".join(lines) + "\n"
 
 
-def _index(summary, run_name):
+def _index(summary: dict[str, Any], run_name: str) -> str:
     e = html.escape
     cards = []
     for r in summary["scenarios"]:
@@ -111,7 +132,7 @@ def _index(summary, run_name):
         .replace("__CARDS__", "\n".join(cards))
 
 
-def _short(type_name):
+def _short(type_name: str | None) -> str:
     """TERRAIN_GRASS_HILLS -> Grass hills."""
     if not type_name:
         return ""

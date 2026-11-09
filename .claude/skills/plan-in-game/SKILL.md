@@ -11,8 +11,8 @@ description: Run the planner on the user's live Civ VI game and get its tacks on
    ask the user to make a manual save first.
 2. **Plan**:
    ```bash
-   PYTHONPATH=src python3 -m civ6_planner plan              # writes Mods/mapdump/ui/mapdump_plan.lua
-   PYTHONPATH=src python3 -m civ6_planner plan --dry-run    # print only
+   civ6-planner plan              # writes Mods/mapdump/ui/mapdump_plan.lua
+   civ6-planner plan --dry-run    # print only
    ```
    The default planner is the MIP (`model.py`); it's deterministic and prints its
    score and HiGHS status in the notes. `--planner greedy` runs the old random stub
@@ -30,7 +30,7 @@ description: Run the planner on the user's live Civ VI game and get its tacks on
 The mod records results in the game config, so they appear in the next save:
 
 ```bash
-PYTHONPATH=src python3 - <<'EOF'
+python - <<'EOF'
 from civ6_planner import dump, paths
 for line in dump.status_lines(dump.save_lines(paths.newest_save())):
     print(line)
@@ -43,7 +43,7 @@ Lines: `MAPDUMP|STATUS|msg=N tiles, turn T, stored in config` (dump ok),
 
 If nothing shows in game and no status lines appear: check that Map Dump is enabled in
 Additional Content, that the game was restarted after any `.modinfo` change, and that
-`Mods/mapdump` matches `mod/mapdump` (`python3 -m civ6_planner install-mod`).
+`Mods/mapdump` matches `mod/mapdump` (`civ6-planner install-mod`).
 
 ## Tack icons
 

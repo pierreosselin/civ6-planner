@@ -11,28 +11,35 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
+from typing import Any, Hashable, Iterable, Mapping
+
+Var = Hashable   # a variable is known by its name, e.g. ("city", (11, 17))
 
 
 @dataclass
 class Solution:
     status: str            # "optimal", "time limit", "infeasible", …
     objective: float
-    values: dict           # variable name -> value (rounded for integer variables)
+    values: dict[Var, float]   # variable -> value (rounded for integer variables)
     seconds: float
-    stats: dict = field(default_factory=dict)
+    stats: dict[str, Any] = field(default_factory=dict)
     log: str = ""          # HiGHS's own log of the run
 
-    def __getitem__(self, name):
+    def __getitem__(self, name: Var) -> float:
         return self.values.get(name, 0)
 
 
 class Model:
-    def __init__(self):
-        self.names, self.lb, self.ub, self.integer, self.obj = [], [], [], [], []
-        self.index = {}
-        self.rows = []  # (coeffs {var index: a}, lo, hi)
+    def __init__(self) -> None:
+        self.names: list[Var] = []
+        self.lb: list[float] = []
+        self.ub: list[float] = []
+        self.integer: list[bool] = []
+        self.obj: list[float] = []
+        self.index: dict[Var, int] = {}
+        self.rows: list[tuple[dict[int, float], float, float]] = []  # (coeffs {var index: a}, lo, hi)
 
-    def var(self, name, lb=0, ub=1, integer=True, obj=0.0):
+    def var(self, name: Var, lb: float = 0, ub: float = 1, integer: bool = True, obj: float = 0.0) -> Var:
         """Add a variable (binary by default) with objective coefficient `obj`."""
         if name in self.index:
             raise ValueError(f"duplicate variable {name!r}")
@@ -44,13 +51,14 @@ class Model:
         self.obj.append(obj)
         return name
 
-    def add_obj(self, name, coef):
+    def add_obj(self, name: Var, coef: float) -> None:
         self.obj[self.index[name]] += coef
 
-    def row(self, coeffs, lo=-math.inf, hi=math.inf):
+    def row(self, coeffs: Mapping[Var, float] | Iterable[tuple[Var, float]],
+            lo: float = -math.inf, hi: float = math.inf) -> None:
         """lo <= sum(a * var) <= hi; coeffs: {name: a} or [(name, a), …] (repeats add up)."""
-        items = coeffs.items() if isinstance(coeffs, dict) else coeffs
-        merged = {}
+        items = coeffs.items() if isinstance(coeffs, Mapping) else coeffs
+        merged: dict[int, float] = {}
         for name, a in items:
             i = self.index[name]
             merged[i] = merged.get(i, 0) + a
@@ -60,14 +68,17 @@ class Model:
         elif lo > 0 or hi < 0:
             raise ValueError("empty row that can't hold")
 
-    def solve(self, time_limit=60, gap=1e-6):
-        """Maximise; HiGHS's log goes into Solution.log (not to the terminal)."""
+    def solve(self, options: dict[str, Any] | None = None) -> Solution:
+        """Maximise; HiGHS's log goes into Solution.log (not to the terminal).
+        options: scipy.optimize.milp options (time_limit, mip_rel_gap, presolve,
+        node_limit); disp is forced on so there is a log to capture."""
+        options = {"time_limit": 60.0, "mip_rel_gap": 1e-6, **(options or {}), "disp": True}
         with _capture_stdout() as out:
-            sol = self._solve(time_limit, gap)
+            sol = self._solve(options)
         sol.log = out.read()
         return sol
 
-    def _solve(self, time_limit, gap):
+    def _solve(self, options: dict[str, Any]) -> Solution:
         import numpy as np
         from scipy.optimize import Bounds, LinearConstraint, milp
         from scipy.sparse import coo_array
@@ -76,17 +87,21 @@ class Model:
         start = time.perf_counter()
         if n == 0:
             return Solution("optimal", 0.0, {}, 0.0, {"variables": 0, "rows": 0})
-        r, c, v = [], [], []
+        r: list[int] = []
+        c: list[int] = []
+        v: list[float] = []
         for k, (coeffs, _, _) in enumerate(self.rows):
             for i, a in coeffs.items():
-                r.append(k), c.append(i), v.append(a)
+                r.append(k)
+                c.append(i)
+                v.append(a)
         constraints = []
         if self.rows:
             a = coo_array((v, (r, c)), shape=(len(self.rows), n)).tocsr()
             constraints.append(LinearConstraint(a, [lo for _, lo, _ in self.rows], [hi for _, _, hi in self.rows]))
         res = milp(c=-np.array(self.obj, dtype=float), constraints=constraints,
                    integrality=np.array(self.integer, dtype=int), bounds=Bounds(self.lb, self.ub),
-                   options={"time_limit": time_limit, "mip_rel_gap": gap, "disp": True})
+                   options=options)
         seconds = time.perf_counter() - start
         status = {0: "optimal", 1: "time limit", 2: "infeasible", 3: "unbounded"}.get(res.status, res.message)
         stats = {"variables": n, "integer": sum(self.integer), "rows": len(self.rows),

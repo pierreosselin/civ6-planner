@@ -21,7 +21,7 @@ work on this Linux port, established by trial.
 
 ## Rules
 
-- Edit `mod/mapdump`, then `PYTHONPATH=src python3 -m civ6_planner install-mod` (it keeps
+- Edit `mod/mapdump`, then `civ6-planner install-mod` (it keeps
   the installed plan). Never edit only the installed copy.
 - `.modinfo` changed → the user must fully restart Civ VI. Lua only → loading a save is
   enough (restart if in doubt). Files read through `include()` are re-read on each call.

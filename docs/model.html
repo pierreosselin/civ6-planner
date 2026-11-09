@@ -39,13 +39,13 @@
   <tr><th>Symbol</th><th>Meaning</th><th>From</th></tr>
   <tr><td>\(T\)</td><td>Revealed tiles of the map</td><td><code>GameMap</code></td></tr>
   <tr><td>\(C \subseteq T\)</td><td>Candidate city sites: open land (not water, mountain, impassable, wonder; unowned or ours), feature allows settling, more than <code>CITY_MIN_RANGE</code> = 3 from every known city. Only the 400 best by site value \(s_c\) are kept.</td><td><code>Rules.can_found_city</code></td></tr>
-  <tr><td>\(D\)</td><td>District types to place per city; today \(D = \{\text{Campus}\}\)</td><td><code>optimise(districts=…)</code></td></tr>
+  <tr><td>\(D\)</td><td>District types to place per city; today \(D = \{\text{Campus}\}\)</td><td><code>problem.districts</code></td></tr>
   <tr><td>\(V\subseteq T\)</td><td>Tiles a district may go on: open land, no city or district yet, not a luxury or strategic resource</td><td><code>Rules.can_place_district</code></td></tr>
   <tr><td>\(N_r(t)\)</td><td>Revealed tiles at hex distance \(1..r\) from \(t\) (map wraps east–west)</td><td><code>GameMap.within</code></td></tr>
   <tr><td>\(R_{c}\)</td><td>\(N_3(c)\cap V\): where city \(c\)'s districts may go (<code>CITY_MAX_BUY_PLOT_RANGE</code> = 3)</td><td></td></tr>
   <tr><td>\(Y\)</td><td>Yield types: food, production, gold, science, culture, faith</td><td></td></tr>
   <tr><td>\(y_{t,k}\)</td><td>Yield \(k\) of tile \(t\) as the game reports it (resources included)</td><td>map dump</td></tr>
-  <tr><td>\(n\)</td><td>Number of cities to found (default 1)</td><td><code>n_cities</code></td></tr>
+  <tr><td>\(n\)</td><td>Number of cities to found (default 1)</td><td><code>problem.n_cities</code></td></tr>
 </table>
 
 <h2>Derived coefficients</h2>
@@ -64,6 +64,9 @@ solving.</p>
 $$ g_{d,c,t} \;=\; a_{d,c,t} \;-\; \lambda\, v(t) \;+\; \beta_D $$
 
 <h2>Decision variables</h2>
+<p class="muted">In <code>model.py</code>: \(x\) is <code>city_vars</code>, \(z\) is <code>district_vars</code>. The model is built from three lists,
+<code>VARIABLES</code>, <code>CONSTRAINTS</code> and <code>OBJECTIVE</code>, with one function per variable family, constraint and
+objective term; comment out a line to drop that constraint or term.</p>
 $$
 \begin{aligned}
 x_c &\in \{0,1\} && c \in C && \text{found a city on } c\\
@@ -75,18 +78,20 @@ $$
 $$
 \max \;\; \sum_{c\in C} \big(s_c + \beta_C\big)\, x_c \;+\; \sum_{d\in D}\sum_{c\in C}\sum_{t\in R_c} g_{d,c,t}\; z_{d,c,t}
 $$
+<p class="muted">Terms, in <code>OBJECTIVE</code>: \(s_c x_c\) <code>site_term</code>, \(a_{d,c,t} z\) <code>adjacency_term</code>,
+\(-\lambda v(t) z\) <code>covered_tile_term</code>, \(\beta_C x\) <code>city_bonus_term</code>, \(\beta_D z\) <code>district_bonus_term</code>.</p>
 <p>The reported <b>score</b> leaves the bonuses out: site value + adjacency − \(\lambda\,v\)(covered tiles).
 \(\beta_C\) and \(\beta_D\) are large enough that cities and districts are always placed when they can be.</p>
 
 <h2>Constraints</h2>
 <div class="card">
-<p><span class="tag">(1)</span>Number of cities</p>
+<p><span class="tag">(1)</span>Number of cities · <code>max_cities</code></p>
 $$ \sum_{c\in C} x_c \;\le\; n $$
-<p><span class="tag">(2)</span>City spacing (only added when \(n>1\))</p>
+<p><span class="tag">(2)</span>City spacing (only added when \(n>1\)) · <code>city_spacing</code></p>
 $$ x_a + x_b \;\le\; 1 \qquad \forall\, a,b\in C,\ \text{dist}(a,b) \le 3 $$
-<p><span class="tag">(3)</span>At most one district of each type per city, and only if the city is founded</p>
+<p><span class="tag">(3)</span>At most one district of each type per city, and only if the city is founded · <code>district_needs_city</code></p>
 $$ \sum_{t\in R_c} z_{d,c,t} \;\le\; x_c \qquad \forall\, d\in D,\ c\in C $$
-<p><span class="tag">(4)</span>One thing per tile</p>
+<p><span class="tag">(4)</span>One thing per tile · <code>one_thing_per_tile</code></p>
 $$ x_t\,[t\in C] \;+\; \sum_{d\in D}\ \sum_{c\,:\,t\in R_c} z_{d,c,t} \;\le\; 1 \qquad \forall\, t\in T $$
 </div>
 <p>Placement rules (terrain, resources, ownership, existing cities) are applied by not creating the variable at all,
@@ -107,15 +112,17 @@ resources or improvements are skipped for now (the Campus has none).</p>
 </table>
 
 <h2>Parameters</h2>
+<p class="muted">Set in <code>config/default.toml</code>; run with <code>--config FILE</code> to override some of them
+(e.g. <code>config/science.toml</code> sets science to 3). The log of each run lists the values used.</p>
 <table>
-  <tr><th>Symbol</th><th>Name in code</th><th>Value</th><th>Meaning</th></tr>
-  <tr><td>\(w_k\)</td><td><code>WEIGHTS</code></td><td>food 1, production 1, gold 0.5, science 1, culture 1, faith 0.5</td><td>Value of one unit of each yield (placeholder)</td></tr>
-  <tr><td>2</td><td><code>SITE_RADIUS</code></td><td>2</td><td>Radius counted in the site value \(s_c\)</td></tr>
-  <tr><td>\(\lambda\)</td><td><code>LOSS_FACTOR</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
-  <tr><td>\(\beta_C\)</td><td><code>CITY_BONUS</code></td><td>100</td><td>Per city founded</td></tr>
-  <tr><td>\(\beta_D\)</td><td><code>DISTRICT_BONUS</code></td><td>10</td><td>Per district placed</td></tr>
-  <tr><td></td><td><code>max_city_candidates</code></td><td>400</td><td>Best sites by \(s_c\) kept as \(C\)</td></tr>
-  <tr><td></td><td><code>time_limit</code>, gap</td><td>60 s, \(10^{-6}\)</td><td>HiGHS limits</td></tr>
+  <tr><th>Symbol</th><th>Setting</th><th>Default</th><th>Meaning</th></tr>
+  <tr><td>\(w_k\)</td><td><code>objective.weights</code></td><td>food 1, production 1, gold 0.5, science 1, culture 1, faith 0.5</td><td>Value of one unit of each yield (placeholder)</td></tr>
+  <tr><td>2</td><td><code>objective.site_radius</code></td><td>2</td><td>Radius counted in the site value \(s_c\)</td></tr>
+  <tr><td>\(\lambda\)</td><td><code>objective.loss_factor</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
+  <tr><td>\(\beta_C\)</td><td><code>objective.city_bonus</code></td><td>100</td><td>Per city founded</td></tr>
+  <tr><td>\(\beta_D\)</td><td><code>objective.district_bonus</code></td><td>10</td><td>Per district placed</td></tr>
+  <tr><td></td><td><code>problem.max_city_candidates</code></td><td>400</td><td>Best sites by \(s_c\) kept as \(C\)</td></tr>
+  <tr><td></td><td><code>solver.time_limit</code>, <code>solver.mip_rel_gap</code></td><td>60 s, \(10^{-6}\)</td><td>HiGHS limits; any other <code>scipy.optimize.milp</code> option (<code>presolve</code>, <code>node_limit</code>) can go in <code>[solver]</code></td></tr>
 </table>
 
 <h2>Size and solve times</h2>

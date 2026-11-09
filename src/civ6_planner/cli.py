@@ -8,7 +8,7 @@ import shutil
 import sys
 import time
 
-from . import dataset, dump, paths, planner, results, tacks, viewer
+from . import config, dataset, dump, paths, planner, results, tacks, viewer
 from .gamemap import GameMap
 from .rules import Rules
 
@@ -32,7 +32,7 @@ def _load(args):
     """The map to work on (a dump dict), a label saying where it came from, and the
     unmasked map when --mask hid part of it (else None).
 
-    --map FILE (a data/maps name or any map JSON) or else the newest save; then
+    --map NAME (a test case in data/, or any map JSON) or else the newest save; then
     --mask hides all but part of it, to make a test scenario.
     """
     if args.map:
@@ -49,9 +49,17 @@ def _load(args):
     return d, label, original
 
 
+def _config(args):
+    """Settings: config/default.toml, then the test case's config.toml (with --map),
+    then --config."""
+    case = dataset.config_path(args.map) if getattr(args, "map", None) else None
+    return config.load(case, args.config)
+
+
 def _add_map_args(p):
     p.add_argument("--save", help="use this .Civ6Save instead of the newest")
-    p.add_argument("--map", help="use a map JSON instead of a save: a name in data/maps, or a path")
+    p.add_argument("--map", help="use a test case instead of a save: a name in data/ (its map.json and "
+                                  "config.toml), or a map JSON path")
     p.add_argument("--mask", choices=["blob", "radius", "revealed"],
                    help="show only part of the map: a random explored-looking blob, a radius, "
                         "or what the player had revealed at capture")
@@ -68,7 +76,8 @@ def cmd_plan(args):
     d, label, _ = _load(args)
     gmap = GameMap(d)
     print(f"Map from {label}: turn {gmap.turn}, {len(gmap)} revealed tiles")
-    planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed), args.planner)
+    planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed), args.planner,
+                                   _config(args))
     for note in notes:
         print("  " + note)
     if args.dry_run:
@@ -90,6 +99,11 @@ def cmd_dump(args):
     with open(args.output, "w") as f:
         json.dump(d, f, separators=(",", ":"))
     print(f"{label}: turn {d['turn']}, {len(tiles)} tiles ({dump.scope(d)}) -> {args.output}")
+    case_config = os.path.join(os.path.dirname(args.output) or ".", dataset.CONFIG_FILE)
+    if os.path.basename(args.output) == dataset.MAP_FILE and not os.path.exists(case_config):
+        with open(case_config, "w") as f:   # a new test case: give it its (empty) settings
+            f.write(dataset.CONFIG_TEMPLATE)
+        print(f"  and {case_config}")
     if args.csv:
         columns = list(dict.fromkeys(k for t in tiles for k in t))
         with open(args.csv, "w", newline="") as f:
@@ -111,7 +125,7 @@ def cmd_watch(args):
             last = (save, os.path.getmtime(save))
             try:
                 cmd_plan(argparse.Namespace(save=save, map=None, mask=None, seed=args.seed, dry_run=False,
-                                            planner=args.planner))
+                                            planner=args.planner, config=args.config))
             except SystemExit as e:
                 print(e, file=sys.stderr)
         time.sleep(args.interval)
@@ -122,7 +136,8 @@ def cmd_view(args):
     gmap = GameMap(d)
     planned, notes = [], []
     if args.plan:
-        planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed), args.planner)
+        planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed), args.planner,
+                                   _config(args))
     path = viewer.write(d, args.output, title=label, tacks=planned, notes=notes, hidden_from=original)
     print(f"{label}: {len(gmap)} tiles{', ' + str(len(planned)) + ' tacks' if args.plan else ''} -> {path}")
     if args.open:
@@ -131,24 +146,23 @@ def cmd_view(args):
 
 
 def cmd_make_map(args):
-    """Save a masked scenario as a map in data/maps, so every run uses the same one."""
+    """Save a masked scenario as a test case data/<name>/, so every run uses the same one."""
     if not args.map or not args.mask:
         sys.exit("make-map needs --map (a full test map) and --mask.")
     d, label, _ = _load(args)
     d["id"] = args.name
     d["scenario"]["source"] = args.map
-    path = os.path.join(dataset.MAPS_DIR, f"{args.name}.json")
-    with open(path, "w") as f:
-        json.dump(d, f, separators=(",", ":"))
-    print(f"{label}: {len(d['tiles'])} tiles -> {path}")
+    folder = dataset.save_case(args.name, d)
+    print(f"{label}: {len(d['tiles'])} tiles -> {folder}/{{map.json, config.toml}}")
 
 
 def cmd_results(args):
     out = args.output or os.path.join("results", time.strftime("%Y%m%d-%H%M%S"))
-    scenarios = results.default_scenarios()
+    scenarios = dataset.cases()
     if args.only:
         scenarios = [s for s in scenarios if any(k in s for k in args.only)]
-    summary = results.run(out, scenarios, seed=args.seed, method=args.planner)
+    summary = results.run(out, scenarios, seed=args.seed, method=args.planner, config_file=args.config,
+                          echo=None if args.quiet else print)
     for r in summary["scenarios"]:
         placed = ", ".join(f"{t['name']}{''.join(f' +{v} {k[6:].lower()}' for k, v in t['yields'].items())} ({t['x']}, {t['y']})"
                            for t in r["tacks"]) or "nothing"
@@ -181,12 +195,16 @@ def main(argv=None):
     _add_map_args(p)
     p.add_argument("--seed", type=int, help="random seed, for repeatable choices")
     p.add_argument("--planner", choices=planner.METHODS, default="mip", help="mip (default) or the greedy stub")
+    p.add_argument("--config", metavar="FILE", help="settings TOML overlaid last (after config/default.toml "
+                                                     "and the test case's config.toml)")
     p.add_argument("--dry-run", action="store_true", help="print the plan instead of writing it")
     p.set_defaults(func=cmd_plan)
 
     p = sub.add_parser("watch", help="re-plan each time the game saves")
     p.add_argument("--seed", type=int)
     p.add_argument("--planner", choices=planner.METHODS, default="mip")
+    p.add_argument("--config", metavar="FILE", help="settings TOML overlaid last (after config/default.toml "
+                                                     "and the test case's config.toml)")
     p.add_argument("--interval", type=float, default=2.0, help="seconds between checks")
     p.set_defaults(func=cmd_watch)
 
@@ -196,7 +214,7 @@ def main(argv=None):
     p = sub.add_parser("dump", help="export the newest save's map dump to JSON/CSV")
     p.add_argument("--save")
     p.add_argument("--full", action="store_true",
-                   help="the whole-map capture made with Ctrl+Shift+F, e.g. -o data/maps/NAME.json")
+                   help="the whole-map capture made with Ctrl+Shift+F, e.g. -o data/NAME/map.json")
     p.add_argument("-o", "--output", default="map.json")
     p.add_argument("--csv")
     p.set_defaults(func=cmd_dump)
@@ -206,21 +224,27 @@ def main(argv=None):
     p.add_argument("--plan", action="store_true", help="run the planner and draw its tacks")
     p.add_argument("--seed", type=int, help="planner seed")
     p.add_argument("--planner", choices=planner.METHODS, default="mip", help="mip (default) or the greedy stub")
+    p.add_argument("--config", metavar="FILE", help="settings TOML overlaid last (after config/default.toml "
+                                                     "and the test case's config.toml)")
     p.add_argument("-o", "--output", default="view.html")
     p.add_argument("--open", action="store_true", help="open the page in your browser")
     p.set_defaults(func=cmd_view)
 
-    p = sub.add_parser("make-map", help="save a masked scenario as a test map in data/maps")
+    p = sub.add_parser("make-map", help="save a masked scenario as a test case data/NAME/")
     _add_map_args(p)
     p.add_argument("name", help="map name, e.g. continents-start")
     p.set_defaults(func=cmd_make_map)
 
-    p = sub.add_parser("results", help="run the planner on every map in data/maps and write a results folder")
+    p = sub.add_parser("results", help="run the planner on every test case in data/ and write a results folder")
     p.add_argument("-o", "--output", help="folder (default results/<date-time>)")
     p.add_argument("--seed", type=int, default=1, help="planner seed (default 1)")
     p.add_argument("--planner", choices=planner.METHODS, default="mip", help="mip (default) or the greedy stub")
+    p.add_argument("--config", metavar="FILE", help="settings TOML overlaid last (after config/default.toml "
+                                                     "and the test case's config.toml)")
     p.add_argument("--only", nargs="+", metavar="TEXT", help="only maps whose name contains TEXT")
     p.add_argument("--open", action="store_true", help="open index.html in your browser")
+    p.add_argument("-q", "--quiet", action="store_true",
+                   help="don't print each map's optimisation log, only the summary")
     p.set_defaults(func=cmd_results)
 
     p = sub.add_parser("install-mod", help="copy the mod into the game's Mods folder")

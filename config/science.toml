@@ -1,0 +1,5 @@
+# Example override: value science three times as much, so the Campus's adjacency weighs
+# more against the city site. Use with `--config config/science.toml`.
+
+[objective.weights]
+science = 3.0

@@ -1,0 +1,8 @@
+# Settings for this test case, overlaid on config/default.toml.
+# Set only what differs here; an empty file means the defaults. For example:
+#
+# [problem]
+# n_cities = 2
+#
+# [objective.weights]
+# science = 2.0

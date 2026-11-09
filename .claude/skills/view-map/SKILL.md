@@ -27,31 +27,39 @@ Hover shows every tile field; drag pans, scroll zooms; checkboxes for hidden til
 ## Results folder: the planner on every test map (usual way to check the optimiser)
 
 ```bash
-PYTHONPATH=src python3 -m civ6_planner results -o results/demo      # default: results/<date-time>
-PYTHONPATH=src python3 -m civ6_planner results --only radius6 --planner greedy --seed 3
+civ6-planner results -o results/demo      # default: results/<date-time>
+civ6-planner results --only radius6 --planner greedy --seed 3
 ```
 
-It plans every map in `data/maps` and writes (git-ignored):
+It plans every test case in `data/` and writes (git-ignored):
 - `index.html`: a card per map with the tacks placed (tile, terrain, yields) and the
   planner's notes, each linking to its map;
 - `<map>/map.html`: the map with the tacks; `<map>/decisions.json`: the scenario,
   tacks (with tile fields and yields), notes, score and its parts, solver stats;
   `<map>/optimisation.log`: model settings, the full HiGHS log, the decisions;
   `summary.json`: all of them, for comparing runs (e.g. before/after a planner change).
+- Each map's optimisation log is also printed to the console as it finishes
+  (`-q`/`--quiet` prints only the one-line summaries).
+- Settings per case: `config/default.toml`, then `data/<case>/config.toml`, then
+  `--config FILE` (e.g. `config/science.toml`); each sets only what it changes, empty
+  files mean the defaults. Each case's results folder gets a `config.toml` with the
+  complete settings used: `--config` on it repeats the run.
 - `--planner greedy` runs the old stub instead of the MIP; both are scored by
   `model.evaluate`, so their `score`s are comparable.
 
-## Test maps in data/maps
+## Test cases in data/
+
+Each is a folder `data/<case>/` with `map.json` and `config.toml` (settings for that case).
 
 - `continents`, `shuffle`: full 74×46 captures (see **capture-test-map**).
 - `<map>-revealed`: what the player had revealed at capture (43 tiles);
   `<map>-radius6`: radius 6 around the player's start. Both keep only resources
   visible at capture. Their `scenario.source` names the full map, so the viewer can
   show the hidden tiles faded.
-- Cut new ones with `make-map` (`--at-player` centres on the middle of the revealed
+- Cut new ones with `make-map` (writes `data/<name>/map.json` and an empty `config.toml`) (`--at-player` centres on the middle of the revealed
   area, since the test maps have no player city yet):
   ```bash
-  PYTHONPATH=src python3 -m civ6_planner make-map --map continents --mask radius --size 8 --at-player --resources visible continents-radius8
+  civ6-planner make-map --map continents --mask radius --size 8 --at-player --resources visible continents-radius8
   ```
   Masks: `revealed`, `radius` (`--size` = hex radius), `blob` (`--size` tiles grown at
   random, `--mask-seed`). `--centre X Y` for a fixed centre.
@@ -59,12 +67,12 @@ It plans every map in `data/maps` and writes (git-ignored):
 ## A single page
 
 ```bash
-PYTHONPATH=src python3 -m civ6_planner view --map continents-radius6 --plan --seed 1 -o view.html
-PYTHONPATH=src python3 -m civ6_planner view --map shuffle --mask blob --size 80 --mask-seed 3 --plan -o view.html
-PYTHONPATH=src python3 -m civ6_planner view --plan -o view.html          # newest save instead of a test map
+civ6-planner view --map continents-radius6 --plan --seed 1 -o view.html
+civ6-planner view --map shuffle --mask blob --size 80 --mask-seed 3 --plan -o view.html
+civ6-planner view --plan -o view.html          # newest save instead of a test map
 ```
 
-`--map` takes a name in `data/maps` or any dump JSON; `--mask …` masks on the fly
+`--map` takes a case name in `data/` (map and its config.toml), a case folder, or any dump JSON; `--mask …` masks on the fly
 without saving; `--plan` runs the planner (`--planner mip|greedy`, `--seed` for greedy). Name pages `view*.html`
 (git-ignored).
 

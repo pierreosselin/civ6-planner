@@ -7,8 +7,7 @@
       "request": "launch",
       "module": "civ6_planner",
       "args": ["plan"],
-      "cwd": "${workspaceFolder}",
-      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+      "cwd": "${workspaceFolder}"
     },
     {
       "name": "Plan tacks (dry run)",
@@ -16,8 +15,7 @@
       "request": "launch",
       "module": "civ6_planner",
       "args": ["plan", "--dry-run"],
-      "cwd": "${workspaceFolder}",
-      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+      "cwd": "${workspaceFolder}"
     },
     {
       "name": "Watch saves and re-plan",
@@ -25,8 +23,7 @@
       "request": "launch",
       "module": "civ6_planner",
       "args": ["watch"],
-      "cwd": "${workspaceFolder}",
-      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+      "cwd": "${workspaceFolder}"
     }
   ]
 }

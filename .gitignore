@@ -1,7 +1,7 @@
 __pycache__/
 *.egg-info/
 .venv/
-map.json
+/map.json
 *.csv
 view*.html
 results/

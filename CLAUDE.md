@@ -21,41 +21,59 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
 
 - `src/civ6_planner/`: `dump.py` (read `MAPDUMP|…` records from saves), `gamemap.py`
   (hex grid), `rules.py` (rules from the game DB), `planner.py` (decisions: `mip` or
-  the old `greedy` stub), `model.py` (the optimiser: MIP formulation, objective
-  weights, `evaluate` to score any plan), `solver.py` (small MIP modelling layer over
+  the old `greedy` stub), `model.py` (the optimiser: MIP formulation, `evaluate` to
+  score any plan), `config.py` (loads the settings), `solver.py` (small MIP modelling layer over
   HiGHS via `scipy.optimize.milp`, captures the HiGHS log), `tacks.py` (writes the
   plan), `dataset.py` (test maps and masks), `viewer.py` (HTML view), `results.py`
   (results folders), `cli.py`.
+- `config/default.toml`: every model and solver parameter (cities and districts to
+  plan, yield weights, bonuses, site radius, loss factor, HiGHS options). `--config FILE`
+  on plan/watch/view/results overlays a file that sets only what it changes (e.g.
+  `config/science.toml`; an empty file means all defaults). Order: default.toml, then the
+  test case's `config.toml`, then `--config`; unknown keys are an error,
+  except in `[solver]`, which passes any `scipy.optimize.milp` option. New parameters go in
+  default.toml and `config.Config`, not as constants in code.
 - `docs/model.html`: the model's maths (KaTeX), for Pierre's Live Server
   (`http://127.0.0.1:5500/docs/model.html`). Keep it in step with `model.py`.
-- `mod/mapdump/`: the Lua mod; `python3 -m civ6_planner install-mod` copies it to the
+- `mod/mapdump/`: the Lua mod; `civ6-planner install-mod` copies it to the
   game (keeps the current plan file).
-- `data/maps/continents.json`, `shuffle.json`: fully revealed 74×46 maps (turn 2,
-  12–13 AI/city-state cities already founded). Every tile has `revealed` and
-  `resource_visible` flags from capture time.
-  `*-revealed.json` (what the player had revealed) and `*-radius6.json` (radius 6
-  around the player's start, visible resources only) are masked maps cut from them
-  with `make-map`; their `scenario.source` names the full map.
-- `results [-o DIR]` plans every map in `data/maps` and writes `results/<date-time>/`
-  (git-ignored): `index.html` (tacks and notes per map, links to each map),
-  `summary.json` (with scores), and per map `decisions.json`, `map.html` and
-  `optimisation.log` (model settings, HiGHS log, decisions). `--planner greedy`
+- `data/<case>/`: one test case per folder, `map.json` + `config.toml` (settings for
+  that case over `config/default.toml`; the six current ones are empty templates).
+  `--map <case>` uses both. `continents`, `shuffle`: fully revealed 74×46 maps
+  (turn 2, 12–13 AI/city-state cities already founded); every tile has `revealed`
+  and `resource_visible` flags from capture time. `*-revealed` (what the player had
+  revealed) and `*-radius6` (radius 6 around the player's start, visible resources
+  only) are masked maps cut from them with `make-map`; their `scenario.source` names
+  the full map's case.
+- `results [-o DIR]` plans every test case in `data/` and writes `results/<date-time>/`
+  (git-ignored): `index.html` (tacks and notes per case, links to each map),
+  `summary.json` (with scores and settings), and per case `config.toml` (the complete
+  settings used; `--config` on it repeats the run), `decisions.json`, `map.html` and
+  `optimisation.log` (model settings, HiGHS log, decisions; also printed to the
+  console unless `-q`). `--planner greedy`
   runs the old stub for comparison.
 
-Run things from the repo root with `PYTHONPATH=src` (VS Code's terminal sets it):
-`python3 -m civ6_planner {plan,view,results,make-map,watch,clear,dump,install-mod} --help`.
-Tests: `PYTHONPATH=src python3 -m unittest discover -s tests`. Only third-party
-dependency: SciPy (for HiGHS; already installed system-wide). Add others only for a
-strong reason.
+Environment: a uv virtualenv in `.venv` (git-ignored; `uv.lock` is committed). Set up
+or refresh with `uv sync`; it installs the package editable, so no `PYTHONPATH` is needed.
+Pierre activates it (`source .venv/bin/activate`; VS Code picks `.venv/bin/python`).
+In Claude's shell, which isn't activated, prefix commands with `uv run` (or call
+`.venv/bin/civ6-planner`). Run from the repo root:
+`civ6-planner {plan,view,results,make-map,watch,clear,dump,install-mod} --help`.
+Tests: `uv run python -m unittest discover -s tests`. Dependencies live in
+`pyproject.toml` (add with `uv add <pkg>`, which updates `uv.lock`); currently only
+SciPy (HiGHS via `scipy.optimize.milp`). Pierre expects to add more (other solvers,
+libraries); keep each one justified.
 
 Skills in `.claude/skills/`: **view-map**, **plan-in-game**, **capture-test-map**,
 **mod-dev** (changing/debugging the mod). Read the relevant one before those tasks.
 
 ## Changing the optimiser
 
-1. Edit `model.py`; add or adjust a test in `tests/test_planner.py` (the MIP's
+1. Edit `model.py`: one function per variable family, constraint and objective term,
+   registered in the `VARIABLES`, `CONSTRAINTS` and `OBJECTIVE` lists (commenting a line
+   out drops it; the log lists what was on). Add or adjust a test in `tests/test_planner.py` (the MIP's
    objective must equal `evaluate()` plus the bonuses).
-2. `python3 -m civ6_planner results -o results/<name>` and compare `summary.json`
+2. `civ6-planner results -o results/<name>` and compare `summary.json`
    scores with the previous run and with `--planner greedy`; check each
    `optimisation.log` says `Optimal` and how long it took. Look at the maps (**view-map**).
 3. Update `docs/model.html` (and the size/time table) and CLAUDE.md's summary.
@@ -159,8 +177,14 @@ capture the whole map (fog ignored) into the next save.
 
 ## Working conventions
 
+- Type-hint function parameters, return values and dataclass fields with the real
+  classes (`GameMap`, `Rules`, `Config`, `Plan`, `Model`, `Instance`), never `object`;
+  shared aliases: `Tile`, `XY` (gamemap.py), `Yields` (config.py), `Var` (solver.py),
+  `AdjacencyRule` (rules.py). Check with
+  `uvx mypy --ignore-missing-imports --check-untyped-defs src/civ6_planner/{model,planner,config,solver,gamemap,rules,results}.py`.
+
 - The old `Mods/MapExtractorMod` (an earlier attempt) is still installed but disabled
   in game; leave it unless Pierre asks.
 - To show the viewer inside the Claude desktop app, use the preview server in
   `.claude/launch.json` (the browser pane can't open `file://` pages); see **view-map**.
-- Generated pages `view*.html`, `map.json`, `*.csv` are git-ignored.
+- Generated pages `view*.html`, `/map.json` (repo root only), `*.csv` are git-ignored.

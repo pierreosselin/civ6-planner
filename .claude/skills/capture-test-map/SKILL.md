@@ -1,12 +1,12 @@
 ---
 name: capture-test-map
-description: Add a new fully revealed test map to data/maps from a Civ VI game. Use when the user wants another map (a different map type or size) for developing the planner offline.
+description: Add a new fully revealed test map (a test case data/NAME/) from a Civ VI game. Use when the user wants another map (a different map type or size) for developing the planner offline.
 ---
 
 # Capture a test map
 
-Test maps are full dumps (fog ignored) stored as `data/maps/NAME.json` (~2 MB for a
-74×46 map). Two exist: `continents` and `shuffle`.
+Test maps are full dumps (fog ignored) stored as test cases `data/NAME/map.json` (~2 MB
+for a 74×46 map), each with a `config.toml` of settings for that case (empty = defaults). Two exist: `continents` and `shuffle`.
 
 ## Steps for the user
 
@@ -20,7 +20,7 @@ Test maps are full dumps (fog ignored) stored as `data/maps/NAME.json` (~2 MB fo
 
 ```bash
 ls -lt ~/.local/share/aspyr-media/"Sid Meier's Civilization VI"/Saves/Single/ | head
-PYTHONPATH=src python3 -m civ6_planner dump --full --save "<path to that save>" -o data/maps/NAME.json
+civ6-planner dump --full --save "<path to that save>" -o data/NAME/map.json   # also writes an empty config.toml
 ```
 
 A save holding a full map is about 2 MB larger than usual. Sanity-check the result:
@@ -29,8 +29,8 @@ tile count = w × h, plausible land/mountain/river counts, then draw it with the
 `results` covers it like the others:
 
 ```bash
-PYTHONPATH=src python3 -m civ6_planner make-map --map NAME --mask revealed --resources visible NAME-revealed
-PYTHONPATH=src python3 -m civ6_planner make-map --map NAME --mask radius --size 6 --at-player --resources visible NAME-radius6
+civ6-planner make-map --map NAME --mask revealed --resources visible NAME-revealed
+civ6-planner make-map --map NAME --mask radius --size 6 --at-player --resources visible NAME-radius6
 ```
 
 Commit the new maps when the user agrees.

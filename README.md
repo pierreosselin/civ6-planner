@@ -16,6 +16,10 @@ one city and its Campus to maximise the city site's yields plus the Campus adjac
 minus the yields of the tile the Campus covers. The first stub below is still there
 as `--planner greedy`, for comparison.
 
+Its parameters (yield weights, bonuses, cities and districts to plan, HiGHS time limit
+and gap) are in `config/default.toml`. `--config FILE` overrides some of them, e.g.
+`civ6-planner results --config config/science.toml`.
+
 ### Greedy stub
 
 - **City**: a random revealed tile where a city can be founded.
@@ -29,17 +33,21 @@ just finished.
 
 ## Usage
 
-From the repository root (VS Code's terminal sets `PYTHONPATH` for you; elsewhere
-run `export PYTHONPATH=src` first, or `pip install -e .` to get a `civ6-planner`
-command):
+Set up once with [uv](https://docs.astral.sh/uv/): `uv sync` creates `.venv` with the
+dependencies and the package (editable, so code changes apply at once). Then, from the
+repository root:
 
 ```bash
-python3 -m civ6_planner plan          # plan from the newest save, then press Ctrl+Shift+T in game
-python3 -m civ6_planner plan --dry-run --seed 1
-python3 -m civ6_planner watch         # re-plan automatically after every save
-python3 -m civ6_planner clear         # empty plan; Ctrl+Shift+T then removes the tacks
-python3 -m civ6_planner dump -o map.json --csv tiles.csv
-python3 -m civ6_planner install-mod   # copy mod/mapdump into the game's Mods folder
+source .venv/bin/activate     # or prefix each command with `uv run`
+```
+
+```bash
+civ6-planner plan          # plan from the newest save, then press Ctrl+Shift+T in game
+civ6-planner plan --dry-run --seed 1
+civ6-planner watch         # re-plan automatically after every save
+civ6-planner clear         # empty plan; Ctrl+Shift+T then removes the tacks
+civ6-planner dump -o map.json --csv tiles.csv
+civ6-planner install-mod   # copy mod/mapdump into the game's Mods folder
 ```
 
 ## Developing without the game
@@ -49,8 +57,8 @@ resources (by class), rivers, borders, and the planner's tacks. Drag to pan, scr
 zoom, hover for a tile's fields.
 
 ```bash
-python3 -m civ6_planner view --plan --open                 # newest save, with the plan
-python3 -m civ6_planner view --map earth1 --plan --open    # a test map from data/maps
+civ6-planner view --plan --open                 # newest save, with the plan
+civ6-planner view --map continents-radius6 --plan --open    # a test case from data/
 ```
 
 Every command that reads a map (`plan`, `view`) takes `--map NAME|FILE` instead of
@@ -58,8 +66,8 @@ the newest save, and `--mask` to hide all but part of it, so the planner can be 
 on more or less of a map:
 
 ```bash
-python3 -m civ6_planner view --map earth1 --mask blob --size 80 --mask-seed 3 --plan --open
-python3 -m civ6_planner plan --map earth1 --mask radius --size 6 --centre 30 20 --dry-run
+civ6-planner view --map earth1 --mask blob --size 80 --mask-seed 3 --plan --open
+civ6-planner plan --map earth1 --mask radius --size 6 --centre 30 20 --dry-run
 ```
 
 - `blob`: `--size` tiles grown at random from the centre, like an explored area.
@@ -70,18 +78,20 @@ python3 -m civ6_planner plan --map earth1 --mask radius --size 6 --centre 30 20 
 
 In the page, "Show hidden tiles" draws the masked-out part of the map faded.
 
-### Test maps (`data/maps/`)
+### Test cases (`data/<case>/`)
 
-Fully revealed maps from real games, captured once:
+Each test case is a folder with `map.json` and `config.toml` (settings for that case,
+overlaid on `config/default.toml`; empty means the defaults). `--map <case>` uses both;
+`results` runs every case. Full maps come from real games, captured once:
 
 1. In game (any game you don't mind seeing in full), press **Ctrl+Shift+F**. A status
    message confirms how many tiles were captured.
 2. Save the game.
-3. `python3 -m civ6_planner dump --full -o data/maps/NAME.json`
+3. `civ6-planner dump --full -o data/NAME/map.json` (also creates an empty `config.toml`)
 
 Each tile keeps `revealed` and `resource_visible` from the moment of capture.
 
-Tests: `python3 -m unittest discover -s tests` (or VS Code's Testing panel).
+Tests: `python -m unittest discover -s tests` (or VS Code's Testing panel).
 
 ## In game
 
@@ -106,7 +116,8 @@ Tests: `python3 -m unittest discover -s tests` (or VS Code's Testing panel).
 | `src/civ6_planner/tacks.py` | writes the plan the mod reads |
 | `src/civ6_planner/dataset.py` | test maps and masking them into partial scenarios |
 | `src/civ6_planner/viewer.py` | the HTML map view |
-| `data/maps/` | fully revealed test maps |
+| `data/<case>/` | test cases: `map.json` + `config.toml` |
+| `config/` | default settings (`default.toml`) and example overrides |
 | `mod/mapdump/` | the Civ VI mod (Lua); install with `install-mod` |
 
 ## Notes on the native Linux (Aspyr) port
