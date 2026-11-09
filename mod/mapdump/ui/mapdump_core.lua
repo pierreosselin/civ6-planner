@@ -6,9 +6,12 @@
 --   MAPDUMP|BEGIN|id=..|turn=..|player=..|w=..|h=..
 --   MAPDUMP|TILE|i=..|x=..|y=..|terrain=..|...
 --   MAPDUMP|CITY|id=..|name=..|x=..|y=..|pop=..
+--   MAPDUMP|PIN|x=..|y=..|name=..|icon=..     the player's own map tacks (not this mod's)
 --   MAPDUMP|END|id=..|tiles=..
 
 local PREFIX = "MAPDUMP|"
+-- Tacks this mod places carry this prefix in their name; all others are the player's.
+local TACK_PREFIX = "[MD] "
 local dumpCount = 0
 
 -- Stores a value in the game configuration, which is written into every save
@@ -176,6 +179,23 @@ local function DumpMap(full)
 		})
 	end
 
+	-- The player's own map tacks, so the planner leaves their tiles alone. In a pcall:
+	-- a problem here must not lose the map dump.
+	pcall(function()
+		local playerCfg = PlayerConfigurations[playerID]
+		for _, pin in pairs(playerCfg:GetMapPins()) do
+			local name = pin:GetName() or ""
+			if name:sub(1, #TACK_PREFIX) ~= TACK_PREFIX then
+				Emit("PIN", {
+					"x=" .. pin:GetHexX(),
+					"y=" .. pin:GetHexY(),
+					"name=" .. (name:gsub("[|=\n]", " ")),
+					"icon=" .. tostring(pin:GetIconName()),
+				})
+			end
+		end
+	end)
+
 	Emit("END", { "id=" .. dumpID, "tiles=" .. tileCount })
 	return lines, tileCount
 end
@@ -234,7 +254,6 @@ end
 -- { x=.., y=.., icon="ICON_DISTRICT_CITY_CENTER", name=".." }. Tacks this mod places
 -- carry TACK_PREFIX in their name; only those are ever moved or deleted, so the
 -- player's own tacks are left alone.
-local TACK_PREFIX = "[MD] "
 
 function MapDump_PlaceTacks()
 	MapDump_Plan = nil

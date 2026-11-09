@@ -91,7 +91,9 @@ constraints or objective first and note what was left out in `model.py` and
 
 ## Map data model
 
-A dump is `{id, turn, player, w, h, scope, tiles: [...], cities: [...]}`;
+A dump is `{id, turn, player, w, h, scope, tiles: [...], cities: [...], pins: [...]}`
+(`pins`: the player's own map tacks `{x, y, name, icon}`, not the mod's `[MD]` ones; the
+planner places nothing on those tiles);
 `scope` is `revealed` (normal) or `full` (fog ignored, test maps only).
 Tile fields: `i x y revealed visible terrain feature resource resource_count
 resource_visible improvement pillaged district wonder owner city is_city hills

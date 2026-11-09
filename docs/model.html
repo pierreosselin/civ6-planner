@@ -39,11 +39,11 @@ Commercial Hub, Holy Site, Theater, Encampment, Harbor), optimal in 0.4–15 s o
 <table>
   <tr><th>Symbol</th><th>Meaning</th><th>From</th></tr>
   <tr><td>\(T\)</td><td>Revealed tiles of the map</td><td><code>GameMap</code></td></tr>
-  <tr><td>\(C \subseteq T\)</td><td>Candidate city sites: open land (not water, mountain, impassable, wonder; unowned or ours), feature allows settling, more than <code>CITY_MIN_RANGE</code> = 3 from every known city. Only the 400 best by site value \(s_c\) are kept.</td><td><code>Rules.can_found_city</code></td></tr>
+  <tr><td>\(C \subseteq T\)</td><td>Candidate city sites: open land (not water, mountain, impassable, wonder; unowned or ours), feature allows settling, more than <code>CITY_MIN_RANGE</code> = 3 from every known city. No tile holding one of the player's own map tacks. Only the 400 best by site value \(s_c\) are kept.</td><td><code>Rules.can_found_city</code></td></tr>
   <tr><td>\(E\)</td><td>The player's existing cities (from the dump's city list); they get the districts they don't
   have yet. \(D_e\subseteq D\): the planned districts city \(e\) lacks (it owns no tile holding that district)</td><td><code>existing_cities</code></td></tr>
   <tr><td>\(D\)</td><td>District types to place per city: Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor (Entertainment Complex left out)</td><td><code>problem.districts</code></td></tr>
-  <tr><td>\(V_d\subseteq T\)</td><td>Tiles district \(d\) may go on: no city or district yet, not a luxury or strategic resource, and
+  <tr><td>\(V_d\subseteq T\)</td><td>Tiles district \(d\) may go on: no city or district yet, no map tack of the player's, not a luxury or strategic resource, and
   open land; for the Harbor (<code>Districts.Coast</code>) a coast or lake tile next to land instead. The Encampment
   (<code>NoAdjacentCity</code>) also stays off tiles next to an existing city.</td><td><code>Rules.can_place_district</code></td></tr>
   <tr><td>\(D^{\text{far}}\subseteq D\)</td><td>Districts that may not touch a city centre: the Encampment</td><td><code>Rules.no_adjacent_city</code></td></tr>

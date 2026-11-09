@@ -21,7 +21,8 @@ description: Run the planner on the user's live Civ VI game and get its tacks on
    With the default config it plans as many new cities as fit in the revealed area
    (anywhere: no travel cost is modelled yet), seven districts each, plus the districts
    the player's existing cities lack. Tacks are named by city: "City C1", "Campus C1",
-   "Holy Site Rome" (C1 = best new site).
+   "Holy Site Rome" (C1 = best new site). Tiles holding one of the player's own tacks
+   are left alone (the dump records them as `PIN`s; needs the mod from 2026-11-09 or later).
 3. **Place**: the user presses **Ctrl+Shift+T** in game. A status message appears:
    "Map Dump: tacks placed N, removed M, skipped K (your own tack there)". Works
    mid-game, no reload. Loading a save also places the current plan.

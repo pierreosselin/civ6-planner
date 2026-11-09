@@ -22,6 +22,8 @@ class GameMap:
         self.tiles: dict[XY, Tile] = {(t["x"], t["y"]): t for t in dump["tiles"]}
         self._by_index = {t["i"]: t for t in dump["tiles"]}
         self.own_cities = dump["cities"]
+        # The player's own map tacks (from the mod's PIN records): {x, y, name, icon}.
+        self.pins: list[dict[str, Any]] = dump.get("pins", [])
 
     def __iter__(self) -> Iterator[Tile]:
         return iter(self.tiles.values())

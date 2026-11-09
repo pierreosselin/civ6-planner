@@ -117,7 +117,8 @@ Step = Callable[[Model, "Instance"], None]   # a variable, constraint or objecti
 def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, districts: tuple[str, ...],
             max_city_candidates: int) -> Instance:
     """Candidate sets and site values; no variables yet. n_cities "max": as many as fit."""
-    tiles = [t for t in gmap if rules.can_found_city(gmap, t)]
+    reserved = {(p["x"], p["y"]) for p in gmap.pins}   # the player's own tacks: leave those tiles alone
+    tiles = [t for t in gmap if rules.can_found_city(gmap, t) and (t["x"], t["y"]) not in reserved]
     site = {(t["x"], t["y"]): site_value(gmap, t, cfg) for t in tiles}
     # On big maps keep the best sites only; the MIP then works on far fewer variables.
     tiles = sorted(tiles, key=lambda t: -site[(t["x"], t["y"])])[:max_city_candidates]
@@ -129,7 +130,7 @@ def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, distr
             if d in built.get(c, set()):
                 continue   # that city already has it
             spots[d, c] = [(n["x"], n["y"]) for n in gmap.within(gmap.tiles[c], rules.district_range)
-                           if rules.can_place_district(gmap, n, d)
+                           if rules.can_place_district(gmap, n, d) and (n["x"], n["y"]) not in reserved
                            and not (rules.no_adjacent_city(d) and gmap.distance(c, n) == 1)]
     if n_cities == "max":
         n_cities = len(sites)

@@ -240,6 +240,18 @@ class OptimiserTest(unittest.TestCase):
         plan = model.optimise(gmap, Rules(), n_cities=0, districts=CAMPUS)
         self.assertEqual((plan.cities, [c for _, _, c in plan.districts]), ([], [(5, 5)]))
 
+    def test_players_own_tacks_are_left_alone(self):
+        # The best site (food everywhere around (5, 6)) holds one of the player's tacks.
+        special = {(x, y): yields(food=2) for x in range(3, 8) for y in range(4, 9)}
+        free = model.optimise(full_map(special), Rules(), n_cities=1, districts=CAMPUS)
+        gmap = full_map(special)
+        gmap.pins = [{"x": x, "y": y, "name": "mine", "icon": "ICON_MAP_PIN_STAR"}
+                     for x, y in free.cities + [xy for _, xy, _ in free.districts]]
+        plan = model.optimise(gmap, Rules(), n_cities=1, districts=CAMPUS)
+        taken = {(p["x"], p["y"]) for p in gmap.pins}
+        self.assertTrue(plan.cities)
+        self.assertFalse(taken & (set(plan.cities) | {xy for _, xy, _ in plan.districts}))
+
 
 class DistrictRulesTest(unittest.TestCase):
     def test_harbor_goes_on_coast_next_to_land(self):
@@ -315,6 +327,7 @@ class SaveParsingTest(unittest.TestCase):
     def test_dump_inside_compressed_save(self):
         text = ("MAPDUMP|BEGIN|id=1-1|turn=1|player=0|w=20|h=12\n"
                 "MAPDUMP|TILE|i=0|x=0|y=0|terrain=TERRAIN_PLAINS|neighbours=1,-1\n"
+                "MAPDUMP|PIN|x=0|y=0|name=2026|icon=ICON_MAP_PIN_STAR\n"
                 "MAPDUMP|END|id=1-1|tiles=1\n")
         blob = b"CIV6header\x00" + zlib.compress(b"\x05junk" + text.encode() + b"\x00\x00tail")
         with tempfile.NamedTemporaryFile(suffix=".Civ6Save", delete=False) as f:
@@ -324,6 +337,7 @@ class SaveParsingTest(unittest.TestCase):
         finally:
             os.unlink(f.name)
         self.assertEqual((d["turn"], len(d["tiles"]), d["tiles"][0]["neighbours"]), (1, 1, [1, -1]))
+        self.assertEqual(d["pins"], [{"x": 0, "y": 0, "name": "2026", "icon": "ICON_MAP_PIN_STAR"}])
 
 
 class ConfigTest(unittest.TestCase):

@@ -42,7 +42,8 @@ def parse_record(line):
 def read_dumps(lines):
     """Yield every complete dump (BEGIN..END) in the lines, oldest first.
 
-    A dump is {'id', 'turn', 'player', 'w', 'h', 'tiles': [...], 'cities': [...]}.
+    A dump is {'id', 'turn', 'player', 'w', 'h', 'tiles': [...], 'cities': [...],
+    'pins': [...]} (pins: the player's own map tacks, {x, y, name, icon}).
     """
     current = None
     for line in lines:
@@ -51,13 +52,15 @@ def read_dumps(lines):
             continue
         kind, fields = record
         if kind == "BEGIN":
-            current = {**fields, "tiles": [], "cities": []}
+            current = {**fields, "tiles": [], "cities": [], "pins": []}
         elif current is None:
             continue
         elif kind == "TILE":
             current["tiles"].append(fields)
         elif kind == "CITY":
             current["cities"].append(fields)
+        elif kind == "PIN":
+            current["pins"].append({**fields, "name": str(fields.get("name", ""))})
         elif kind == "ERROR":
             print(f"warning: dump {current.get('id')} failed: {fields.get('msg')}", file=sys.stderr)
             current = None
