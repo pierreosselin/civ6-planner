@@ -91,7 +91,7 @@ const TACK = { ICON_DISTRICT_CITY_CENTER:["C","#c0392b"], ICON_DISTRICT_CAMPUS:[
   ICON_DISTRICT_INDUSTRIAL_ZONE:["P","#d35400"], ICON_DISTRICT_COMMERCIAL_HUB:["G","#b8900b"],
   ICON_DISTRICT_HOLY_SITE:["F","#7f8c8d"], ICON_DISTRICT_THEATER:["T","#8e44ad"],
   ICON_DISTRICT_ENCAMPMENT:["E","#6d4c41"], ICON_DISTRICT_HARBOR:["H","#16a085"],
-  ICON_DISTRICT_AQUEDUCT:["A","#2980b9"] };
+  ICON_DISTRICT_AQUEDUCT:["A","#2980b9"], ICON_DISTRICT_DAM:["D","#34495e"] };
 // Yields in the game's order and colours: [field, letter, fill, text colour].
 const YIELDS = [["YIELD_FOOD","F","#5f9e2f","#fff"], ["YIELD_PRODUCTION","P","#c8682a","#fff"], ["YIELD_GOLD","G","#e0b42a","#222"],
                 ["YIELD_SCIENCE","S","#3b7fd0","#fff"], ["YIELD_CULTURE","C","#8e4fbf","#fff"], ["YIELD_FAITH","Fa","#e9e6dc","#222"]];
@@ -147,8 +147,9 @@ function drawTile(t, layer, interactive) {
 function drawRivers(t, layer) {
   const [cx, cy] = centre(t.x, t.y);
   // Edges by corner pair; corner k sits at 60k-30 degrees, clockwise on screen from east,
-  // so 0 is upper-right, 3 lower-left, 5 top: W = 3-4, NW = 4-5, NE = 5-0.
-  [["river_w", 3, 4], ["river_nw", 4, 5], ["river_ne", 5, 0]].forEach(([key, a, b]) => {
+  // so 0 is upper-right, 2 bottom, 5 top: E = 0-1, SE = 1-2, SW = 2-3. The game's flags
+  // say the plot is W / NW / NE *of* the river, so the river is on its E / SE / SW edge.
+  [["river_w", 0, 1], ["river_nw", 1, 2], ["river_ne", 2, 3]].forEach(([key, a, b]) => {
     if (!t[key]) return;
     const [x1, y1] = corner(cx, cy, a), [x2, y2] = corner(cx, cy, b);
     el("line", { x1, y1, x2, y2, stroke: "#1f6fd1", "stroke-width": 3.2, "stroke-linecap": "round" }, layer);
@@ -222,7 +223,7 @@ const legend = [["grass", TERRAIN.GRASS], ["plains", TERRAIN.PLAINS], ["desert",
   ["P industrial zone", TACK.ICON_DISTRICT_INDUSTRIAL_ZONE[1]], ["G commercial hub", TACK.ICON_DISTRICT_COMMERCIAL_HUB[1]],
   ["F holy site", TACK.ICON_DISTRICT_HOLY_SITE[1]], ["T theater", TACK.ICON_DISTRICT_THEATER[1]],
   ["E encampment", TACK.ICON_DISTRICT_ENCAMPMENT[1]], ["H harbor", TACK.ICON_DISTRICT_HARBOR[1]],
-  ["A aqueduct", TACK.ICON_DISTRICT_AQUEDUCT[1]]];
+  ["A aqueduct", TACK.ICON_DISTRICT_AQUEDUCT[1]], ["D dam", TACK.ICON_DISTRICT_DAM[1]]];
 document.getElementById("legend").innerHTML = legend.map(([n, c]) => `<span><span class="sw" style="background:${c}"></span>${n}</span>`).join("")
   + `<span class="muted" style="grid-column:1/-1">dot top-left: feature · ^^: hills · coloured edge: owner</span>`
   + [["forest", "FOREST"], ["rainforest", "JUNGLE"], ["marsh", "MARSH"], ["floodplains", "FLOODPLAINS"], ["reef", "REEF"],

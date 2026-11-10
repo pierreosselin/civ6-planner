@@ -27,13 +27,27 @@ AdjacencyRule = dict[str, Any]
 # Districts table flags used for placement: Coast (goes on a coast water tile),
 # AdjacentToLand, NoAdjacentCity (not next to any city centre, e.g. Encampment),
 # Aqueduct (next to its city centre and a fresh-water source: see fresh_water_source).
-PLACEMENT_FLAGS = ("Coast", "AdjacentToLand", "NoAdjacentCity", "Aqueduct")
+PLACEMENT_FLAGS = ("Coast", "AdjacentToLand", "NoAdjacentCity", "Aqueduct", "RequiresPopulation")
+
+# Districts that count against the population limit (RequiresPopulation = 1), for when the
+# database can't be read.
+DEFAULT_SPECIALTY = ("DISTRICT_CAMPUS", "DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_COMMERCIAL_HUB",
+                     "DISTRICT_HOLY_SITE", "DISTRICT_THEATER", "DISTRICT_ENCAMPMENT", "DISTRICT_HARBOR")
+
+# Dam-like districts, an engine rule not in the database: on a tile with a river along at
+# least two of its edges, and one per river (the floodplains requirement is in the
+# database, District_RequiredFeatures).
+DAM_DISTRICTS = ("DISTRICT_DAM",)
+DAM_MIN_RIVER_EDGES = 2
 
 # Placement flags of the special planned districts, for when the database can't be read.
 DEFAULT_PLACEMENT: dict[str, dict[str, int]] = {
     "DISTRICT_HARBOR": {"Coast": 1, "AdjacentToLand": 1, "NoAdjacentCity": 0, "Aqueduct": 0},
     "DISTRICT_ENCAMPMENT": {"Coast": 0, "AdjacentToLand": 0, "NoAdjacentCity": 1, "Aqueduct": 0},
     "DISTRICT_AQUEDUCT": {"Coast": 0, "AdjacentToLand": 0, "NoAdjacentCity": 0, "Aqueduct": 1},
+}
+DEFAULT_REQUIRED_FEATURES: dict[str, set[str]] = {
+    "DISTRICT_DAM": {"FEATURE_FLOODPLAINS", "FEATURE_FLOODPLAINS_GRASSLAND", "FEATURE_FLOODPLAINS_PLAINS"},
 }
 
 # Campus adjacency as in the Gathering Storm database, for when it can't be read.
@@ -53,7 +67,9 @@ class Rules:
     def __init__(self, city_min_range: int = 3, district_range: int = 3,
                  resource_class: dict[str, str] | None = None, no_settle_features: tuple[str, ...] = (),
                  adjacencies: dict[str, list[AdjacencyRule]] | None = None,
-                 placement: dict[str, dict[str, int]] | None = None):
+                 placement: dict[str, dict[str, int]] | None = None,
+                 required_features: dict[str, set[str]] | None = None,
+                 valid_terrains: dict[str, set[str]] | None = None):
         # A new city centre must be more than city_min_range tiles from any other.
         self.city_min_range = city_min_range
         # Districts go within district_range tiles of their city centre.
@@ -64,6 +80,9 @@ class Rules:
         self.adjacencies = DEFAULT_ADJACENCIES if adjacencies is None else adjacencies
         # District -> placement flags (see PLACEMENT_FLAGS).
         self.placement = dict(DEFAULT_PLACEMENT if placement is None else placement)
+        # District -> features it must go on / terrains it may go on (empty: no rule).
+        self.required_features = dict(DEFAULT_REQUIRED_FEATURES if required_features is None else required_features)
+        self.valid_terrains = dict(valid_terrains or {})
 
     @classmethod
     def from_game(cls, db_path: str = paths.GAMEPLAY_DB) -> Rules:
@@ -80,9 +99,18 @@ class Rules:
                 adjacencies=cls._read_adjacencies(db),
                 placement={d: dict(zip(PLACEMENT_FLAGS, flags)) for d, *flags in
                            db.execute(f"SELECT DistrictType, {', '.join(PLACEMENT_FLAGS)} FROM Districts")},
+                required_features=cls._read_sets(db, "District_RequiredFeatures", "FeatureType"),
+                valid_terrains=cls._read_sets(db, "District_ValidTerrains", "TerrainType"),
             )
         finally:
             db.close()
+
+    @staticmethod
+    def _read_sets(db: sqlite3.Connection, table: str, column: str) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for district, value in db.execute(f"SELECT DistrictType, {column} FROM {table}"):
+            out.setdefault(district, set()).add(value)
+        return out
 
     @staticmethod
     def _read_adjacencies(db: sqlite3.Connection) -> dict[str, list[AdjacencyRule]]:
@@ -189,6 +217,10 @@ class Rules:
         - Coast districts (Harbor): a coast or lake water tile next to land.
         - Others: open land (the planned districts have no terrain list of their own).
         - NoAdjacentCity districts (Encampment): not next to an existing city centre.
+        - District_RequiredFeatures / District_ValidTerrains when the district has rows
+          there (the Dam: floodplains).
+        - Dams: a river along at least two of the tile's edges (engine rule; one per
+          river is a constraint in model.py).
         Engine rule, not in the database: districts can't go on luxury or strategic
         resources (bonus resources are removed).
         """
@@ -205,11 +237,30 @@ class Rules:
             return False
         if flags.get("NoAdjacentCity") and any(n["is_city"] for n in gmap.neighbours(tile)):
             return False
+        if district in self.required_features and tile["feature"] not in self.required_features[district]:
+            return False
+        if district in self.valid_terrains and tile["terrain"] not in self.valid_terrains[district]:
+            return False
+        if self.is_dam(district) and len(gmap.river_edges(tile)) < DAM_MIN_RIVER_EDGES:
+            return False
         return self.resource_class.get(tile["resource"]) not in LOCKED_RESOURCES
 
     def no_adjacent_city(self, district: str) -> bool:
         """The district may not touch any city centre (Encampment)."""
         return bool(self.placement.get(district, {}).get("NoAdjacentCity"))
+
+    def is_specialty(self, district: str) -> bool:
+        """Counts against the city's population limit (Districts.RequiresPopulation): every
+        planned district but the Aqueduct and the Dam."""
+        flags = self.placement.get(district, {})
+        if "RequiresPopulation" in flags:
+            return bool(flags["RequiresPopulation"])
+        return district in DEFAULT_SPECIALTY
+
+    @staticmethod
+    def is_dam(district: str) -> bool:
+        """One per river, on a tile with a river along at least two edges (engine rule)."""
+        return district in DAM_DISTRICTS
 
     def is_aqueduct(self, district: str) -> bool:
         """Aqueduct-like districts (Aqueduct, Bath): next to their own city centre and a

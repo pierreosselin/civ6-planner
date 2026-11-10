@@ -8,7 +8,7 @@ import shutil
 import sys
 import time
 
-from . import config, dataset, dump, paths, planner, results, tacks, viewer
+from . import config, dataset, dump, metrics, paths, planner, results, tacks, viewer
 from .gamemap import GameMap
 from .rules import Rules
 
@@ -76,8 +76,11 @@ def cmd_plan(args):
     d, label, _ = _load(args)
     gmap = GameMap(d)
     print(f"Map from {label}: turn {gmap.turn}, {len(gmap)} revealed tiles")
-    planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed), args.planner,
-                                   _config(args))
+    rules = Rules.from_game()
+    p = planner.solve(gmap, rules, random.Random(args.seed), args.planner, _config(args))
+    planned, notes = planner.to_tacks(gmap, rules, p), planner.explain(gmap, rules, p, args.planner)
+    for line in metrics.format_metrics(metrics.plan_metrics(gmap, rules, p)):
+        print("  " + line)
     for note in notes:
         print("  " + note)
     if args.dry_run:

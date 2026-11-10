@@ -12,8 +12,11 @@ districts = [                      # districts per city (game type names)
     "DISTRICT_ENCAMPMENT",
     "DISTRICT_HARBOR",             # coast tiles only; cities without one simply get none
     "DISTRICT_AQUEDUCT",           # next to the city centre and fresh water (river, lake, mountain, oasis)
+    "DISTRICT_DAM",                # floodplains with a river on 2+ edges; one per river
 ]
 max_city_candidates = 400          # keep only the best city sites by site value
+max_specialty_districts = 3        # per city: districts with RequiresPopulation (all planned ones
+                                   # but Aqueduct and Dam); the game allows 1 + (population - 1) // 3
 
 [objective]
 site_radius = 2                    # tiles counted in a city's site value

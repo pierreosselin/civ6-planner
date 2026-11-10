@@ -150,8 +150,8 @@ local function DumpMap(full)
 				"natural_wonder=" .. Bool(Call(plot, "IsNaturalWonder")),
 				"impassable=" .. Bool(Call(plot, "IsImpassable")),
 				"river=" .. Bool(Call(plot, "IsRiver")),
-				-- River/cliff on this plot's W, NW and NE edges; the other three edges
-				-- belong to the neighbours, so combine with neighbour data for all six.
+				-- The plot is W / NW / NE *of* a river or cliff, i.e. it runs along the plot's
+				-- E / SE / SW edge; the other three edges are on the neighbours' flags.
 				"river_w=" .. Bool(Call(plot, "IsWOfRiver")),
 				"river_nw=" .. Bool(Call(plot, "IsNWOfRiver")),
 				"river_ne=" .. Bool(Call(plot, "IsNEOfRiver")),

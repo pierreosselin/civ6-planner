@@ -35,6 +35,55 @@ class GameMap:
         """Revealed neighbours of a tile, using the adjacency the game reported."""
         return [self._by_index[i] for i in tile["neighbours"] if i in self._by_index]
 
+    # Directions of `neighbours`: 0 NE, 1 E, 2 SE, 3 SW, 4 W, 5 NW. The game's flags say
+    # which side of a river the plot is on: IsWOfRiver (river_w) = the plot is west of a
+    # river, i.e. the river runs along its EAST edge; river_nw -> its SE edge; river_ne ->
+    # its SW edge (as the game's map scripts use them). Its W, NW and NE edges are the
+    # E, SE and SW edges of the neighbour on that side. Checked: the edges found agree
+    # with IsRiver on every tile of both test maps, and every floodplain touches a river.
+    _RIVER_FLAG = {1: (None, "river_w"), 2: (None, "river_nw"), 3: (None, "river_ne"),
+                   4: (4, "river_w"), 5: (5, "river_nw"), 0: (0, "river_ne")}
+
+    def neighbour_at(self, tile: Tile, direction: int) -> Tile | None:
+        """The revealed neighbour in a direction (0 NE … 5 NW), or None."""
+        i = tile["neighbours"][direction]
+        return self._by_index.get(i)
+
+    def river_edge(self, tile: Tile, direction: int) -> bool:
+        """Does a river run along the tile's edge in this direction? False if the flag is
+        on an unrevealed neighbour."""
+        side, flag = self._RIVER_FLAG[direction]
+        owner = tile if side is None else self.neighbour_at(tile, side)
+        return bool(owner and owner.get(flag))
+
+    def river_edges(self, tile: Tile) -> list[int]:
+        """Directions of the tile's edges that have a river."""
+        return [d for d in range(6) if self.river_edge(tile, d)]
+
+    def rivers(self) -> dict[XY, int]:
+        """River id of every tile touching a river: tiles facing each other across a river
+        edge are on the same river, and consecutive edges of one river always share a
+        tile, so this joins whole rivers (and rivers that meet)."""
+        parent: dict[XY, XY] = {}
+
+        def find(a: XY) -> XY:
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        for t in self:
+            for d in self.river_edges(t):
+                a = (t["x"], t["y"])
+                parent.setdefault(a, a)
+                n = self.neighbour_at(t, d)
+                if n is not None:
+                    b = (n["x"], n["y"])
+                    parent.setdefault(b, b)
+                    parent[find(a)] = find(b)
+        roots: dict[XY, int] = {}
+        return {xy: roots.setdefault(find(xy), len(roots)) for xy in parent}
+
     @staticmethod
     def _axial(x: int, y: int) -> XY:
         return x - (y - (y & 1)) // 2, y

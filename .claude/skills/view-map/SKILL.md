@@ -18,7 +18,7 @@ hexes. What a tile shows:
   badges with a white border (e.g. the Campus's science adjacency, from `Tack.yields`).
 - blue edges = rivers.
 - tacks: badge only, no text (**C** city, **S** campus, **P** industrial zone, **G** commercial
-  hub, **F** holy site, **T** theater, **E** encampment, **H** harbor, **A** aqueduct) plus a thick hex
+  hub, **F** holy site, **T** theater, **E** encampment, **H** harbor, **A** aqueduct, **D** dam) plus a thick hex
   outline in the tack's colour. The side panel lists the tacks (click to zoom to
   one) and the planner's notes.
 
@@ -37,7 +37,8 @@ It plans every test case in `data/` and writes (git-ignored):
   planner's notes, each linking to its map;
 - `<map>/map.html`: the map with the tacks; `<map>/decisions.json`: the scenario,
   tacks (with tile fields and yields), notes, score and its parts, solver stats;
-  `<map>/optimisation.log`: model settings, the full HiGHS log, the decisions;
+  `<map>/optimisation.log`: model settings, the full HiGHS log, metrics (districts per
+  city, share of cities with each district type, mean adjacency per type), the decisions;
   `summary.json`: all of them, for comparing runs (e.g. before/after a planner change).
 - Each map's optimisation log is also printed to the console as it finishes
   (`-q`/`--quiet` prints only the one-line summaries).
@@ -100,8 +101,10 @@ without saving; `--plan` runs the planner (`--planner mip|greedy`, `--seed` for 
 
 - North is up and odd rows sit half a hex east: (22,35) must appear up-right of
   (22,34).
-- River edges: corner k is at 60k−30° clockwise from east on screen, so W = corners
-  3–4, NW = 4–5, NE = 5–0.
+- River edges: corner k is at 60k−30° clockwise from east on screen, so E = corners
+  0–1, SE = 1–2, SW = 2–3. A tile's `river_w` / `river_nw` / `river_ne` flags (the plot
+  is W / NW / NE *of* the river) mean a river on its E / SE / SW edge. Rivers should
+  draw as continuous lines with floodplains along them.
 - A masked area crossing the east–west wrap must draw in one piece (the page starts
   drawing at the widest run of empty columns).
 - Tile radius is `R = 32`; glyph offsets are hand-placed for it. The yield row is

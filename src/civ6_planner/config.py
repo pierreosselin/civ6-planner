@@ -26,6 +26,7 @@ class Config:
     n_cities: int | str            # a number, or "max": as many as fit
     districts: tuple[str, ...]     # district types, e.g. DISTRICT_CAMPUS
     max_city_candidates: int
+    max_specialty_districts: int   # per city, districts that need population (RequiresPopulation)
     site_radius: int
     loss_factor: float
     city_bonus: float
@@ -62,6 +63,7 @@ def load(*paths: str | None) -> Config:
     return Config(
         n_cities=p["n_cities"], districts=tuple(p["districts"]),
         max_city_candidates=p["max_city_candidates"],
+        max_specialty_districts=p["max_specialty_districts"],
         site_radius=o["site_radius"], loss_factor=o["loss_factor"],
         city_bonus=o["city_bonus"], district_bonus=o["district_bonus"],
         weights={"YIELD_" + k.upper(): float(v) for k, v in o["weights"].items()},

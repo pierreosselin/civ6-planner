@@ -106,6 +106,7 @@ class Instance:
     sites: list[XY]                      # C: candidate city tiles, best site value first
     site: dict[XY, float]                # c -> site value s_c
     own: list[XY]                        # E: the player's existing cities (always there)
+    specialty_left: dict[XY, int]        # existing city -> specialty districts it may still get
     spots: dict[tuple[str, XY], list[XY]]  # (district, city) -> R_{d,c}: tiles it may go on
     # Planned-next-to-planned bonuses: (d, d2, yield, change), e.g. Industrial Zone +2
     # production per neighbouring Aqueduct.
@@ -129,6 +130,8 @@ def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, distr
     tiles = sorted(tiles, key=lambda t: -site[(t["x"], t["y"])])[:max_city_candidates]
     sites = [(t["x"], t["y"]) for t in tiles]
     own, built = existing_cities(gmap)
+    specialty_left = {e: max(0, cfg.max_specialty_districts - sum(rules.is_specialty(d) for d in built[e]))
+                      for e in own}
     spots = {}
     for d in districts:
         for c in sites + own:
@@ -142,7 +145,7 @@ def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, distr
     if n_cities == "max":
         n_cities = len(sites)
     return Instance(gmap, rules, cfg, int(n_cities), tuple(districts), sites, {c: site[c] for c in sites},
-                    own, spots, rules.neighbour_bonuses(tuple(districts)))
+                    own, specialty_left, spots, rules.neighbour_bonuses(tuple(districts)))
 
 
 def existing_cities(gmap: GameMap) -> tuple[list[XY], dict[XY, set[str]]]:
@@ -246,6 +249,23 @@ def district_needs_city(m: Model, inst: Instance) -> None:
             m.row([(inst.z[d, c, t], 1) for t in tiles], hi=1)
 
 
+def specialty_limit(m: Model, inst: Instance) -> None:
+    """(8) Population limit: at most K specialty districts per city (those with
+    RequiresPopulation; not the Aqueduct or Dam):
+    sum_{d specialty, t} z[d,c,t] <= K x[c] for a new city, <= K - (already built) for
+    an existing one. K = problem.max_specialty_districts."""
+    k = inst.cfg.max_specialty_districts
+    per_city: dict[XY, list[Var]] = {}
+    for (d, c, t), v in inst.z.items():
+        if inst.rules.is_specialty(d):
+            per_city.setdefault(c, []).append(v)
+    for c, vs in per_city.items():
+        if c in inst.x:
+            m.row([(v, 1) for v in vs] + [(inst.x[c], -k)], hi=0)
+        else:
+            m.row([(v, 1) for v in vs], hi=inst.specialty_left.get(c, k))
+
+
 def not_next_to_planned_city(m: Model, inst: Instance) -> None:
     """(5) Districts that may not touch a city centre (Encampment) stay off tiles next to
     another planned city: z[d,c,t] + x[c'] <= 1 for c' next to t. (Its own city c is
@@ -257,6 +277,21 @@ def not_next_to_planned_city(m: Model, inst: Instance) -> None:
             other = (n["x"], n["y"])
             if other != c and other in inst.x:
                 m.row({v: 1, inst.x[other]: 1}, hi=1)
+
+
+def one_dam_per_river(m: Model, inst: Instance) -> None:
+    """(7) At most one Dam per river, over all cities; none on a river that already has
+    one: sum of z[dam,c,t] over the tiles t of river r <= 1 (or 0)."""
+    river = inst.gmap.rivers()
+    taken = {river[(t["x"], t["y"])] for t in inst.gmap
+             if inst.rules.is_dam(t["district"]) and (t["x"], t["y"]) in river}
+    on: dict[int, list[Var]] = {}
+    for (d, c, t), v in inst.z.items():
+        if inst.rules.is_dam(d) and t in river:
+            on.setdefault(river[t], []).append(v)
+    for r, vs in on.items():
+        if len(vs) > 1 or r in taken:
+            m.row([(v, 1) for v in vs], hi=0 if r in taken else 1)
 
 
 def neighbour_bonus_link(m: Model, inst: Instance) -> None:
@@ -342,7 +377,9 @@ CONSTRAINTS: list[Step] = [
     district_needs_city,
     one_thing_per_tile,
     not_next_to_planned_city,
+    one_dam_per_river,
     neighbour_bonus_link,
+    specialty_limit,
 ]
 OBJECTIVE: list[Step] = [
     site_term,

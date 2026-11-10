@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import zlib
 
-from civ6_planner import config, dataset, dump, model, planner, solver
+from civ6_planner import config, dataset, dump, metrics, model, planner, solver
 from civ6_planner.gamemap import GameMap
 from civ6_planner.rules import Rules
 
@@ -271,8 +271,84 @@ class OptimiserTest(unittest.TestCase):
         self.assertEqual(gmap.distance(at["DISTRICT_INDUSTRIAL_ZONE"], at["DISTRICT_AQUEDUCT"]), 1)
         self.check_score(gmap, rules, plan, 2)
 
+    def test_three_specialty_districts_per_city_aqueduct_free(self):
+        # Five specialty districts asked for, plus an Aqueduct (river next to the city).
+        special = {(x, y): yields(food=2) for x in range(3, 8) for y in range(4, 9)}
+        special[(6, 6)] = {**special[(6, 6)], "river": 1}
+        gmap = full_map(special)
+        specialty = ("DISTRICT_CAMPUS", "DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_COMMERCIAL_HUB",
+                     "DISTRICT_HOLY_SITE", "DISTRICT_THEATER")
+        plan = model.optimise(gmap, Rules(), n_cities=1, districts=specialty + ("DISTRICT_AQUEDUCT",))
+        kinds = [d for d, _, _ in plan.districts]
+        self.assertEqual(sum(d in specialty for d in kinds), 3)
+        self.assertIn("DISTRICT_AQUEDUCT", kinds)
+
+    def test_existing_city_specialty_districts_count(self):
+        # Rome has a Campus and a Holy Site: one specialty district left under the limit of 3.
+        gmap = full_map({(5, 5): {"is_city": 1, "owner": 0, "city": 1, "district": "DISTRICT_CITY_CENTER"},
+                         (6, 5): {"owner": 0, "city": 1, "district": "DISTRICT_CAMPUS"},
+                         (4, 5): {"owner": 0, "city": 1, "district": "DISTRICT_HOLY_SITE"}})
+        gmap.own_cities = [{"id": 1, "name": "Rome", "x": 5, "y": 5}]
+        plan = model.optimise(gmap, Rules(), n_cities=0,
+                              districts=("DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_COMMERCIAL_HUB", "DISTRICT_THEATER"))
+        self.assertEqual(len(plan.districts), 1)
+
+    def test_metrics_count_districts_per_city_and_type(self):
+        gmap = full_map({(5, 5): {"is_city": 1, "owner": 0, "city": 1, "district": "DISTRICT_CITY_CENTER"}})
+        gmap.own_cities = [{"id": 1, "name": "Rome", "x": 5, "y": 5}]
+        plan = model.Plan(cities=[(12, 6)], districts=[
+            ("DISTRICT_CAMPUS", (13, 6), (12, 6)), ("DISTRICT_HOLY_SITE", (11, 6), (12, 6)),
+            ("DISTRICT_CAMPUS", (6, 5), (5, 5))])
+        m = metrics.plan_metrics(gmap, Rules(), plan)
+        self.assertEqual((m["cities"], m["new_cities"], m["existing_cities"], m["districts"]), (2, 1, 1, 3))
+        self.assertEqual(m["districts_per_city"]["histogram"], {1: 1, 2: 1})
+        campus = m["by_type"]["DISTRICT_CAMPUS"]
+        self.assertEqual((campus["count"], campus["cities_with"], campus["share_of_cities"]), (2, 2, 1.0))
+        self.assertEqual(m["by_type"]["DISTRICT_HOLY_SITE"]["share_of_cities"], 0.5)
+        # Each Campus touches its city centre only: +1 per 2 districts gives 0.
+        self.assertTrue(metrics.format_metrics(m))
+
+
+class RiverTest(unittest.TestCase):
+    def test_flags_mean_the_plot_is_west_of_the_river(self):
+        # (5, 6) is W of a river: the river runs between it and its east neighbour (6, 6).
+        gmap = full_map({(5, 6): {"river_w": 1}})
+        a, b = gmap.tiles[(5, 6)], gmap.tiles[(6, 6)]
+        self.assertEqual(gmap.river_edges(a), [1])          # E edge of (5, 6)
+        self.assertEqual(gmap.river_edges(b), [4])          # W edge of (6, 6)
+        self.assertEqual(gmap.neighbour_at(a, 1)["x"], 6)
+        # river_nw: the SE edge; river_ne: the SW edge.
+        gmap = full_map({(5, 6): {"river_nw": 1, "river_ne": 1}})
+        self.assertEqual(gmap.river_edges(gmap.tiles[(5, 6)]), [2, 3])
+
+    def test_tiles_along_one_river_share_an_id(self):
+        # A river along the E edges of (5, 6) and (5, 7)... joined through the tiles across.
+        gmap = full_map({(5, 6): {"river_w": 1}, (5, 7): {"river_w": 1}, (15, 2): {"river_w": 1}})
+        r = gmap.rivers()
+        self.assertEqual(r[(5, 6)], r[(6, 6)])
+        self.assertNotEqual(r[(5, 6)], r[(15, 2)])
+
 
 class DistrictRulesTest(unittest.TestCase):
+    def test_dam_on_floodplains_with_two_river_edges(self):
+        flood = {"feature": "FEATURE_FLOODPLAINS"}
+        gmap = full_map({(5, 6): {**flood, "river_w": 1, "river_nw": 1},   # E and SE edges
+                         (8, 6): {**flood, "river_w": 1},                   # one edge only
+                         (11, 6): {"river_w": 1, "river_nw": 1}})           # no floodplains
+        rules = Rules()
+        ok = {(t["x"], t["y"]) for t in gmap if rules.can_place_district(gmap, t, "DISTRICT_DAM")}
+        self.assertEqual(ok, {(5, 6)})
+
+    def test_one_dam_per_river(self):
+        # Two dam-able tiles on one river, far apart: only one Dam, even with two cities.
+        flood = {"feature": "FEATURE_FLOODPLAINS"}
+        river = {(x, 6): {**flood, "river_w": 1, "river_nw": 1} for x in range(2, 18)}
+        gmap = full_map(river)
+        plan = model.optimise(gmap, Rules(), n_cities=2, districts=("DISTRICT_DAM",))
+        dams = [xy for d, xy, _ in plan.districts if d == "DISTRICT_DAM"]
+        self.assertEqual(len(plan.cities), 2)
+        self.assertEqual(len(dams), 1)
+
     def test_aqueduct_next_to_city_and_fresh_water(self):
         gmap = full_map({(6, 5): {"river": 1}, (3, 3): MOUNTAIN})
         rules = Rules()

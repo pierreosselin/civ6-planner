@@ -63,11 +63,11 @@ checked against each other. Defaults are those of <code>config/default.toml</cod
 <ul>
   <li>tiles on which to found <b>new cities</b> (by default as many as fit), and</li>
   <li>for each new city and each of the player's <b>existing cities</b>, a tile for each planned <b>district</b> it does not
-  have yet (Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor, Aqueduct),</li>
+  have yet (Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor, Aqueduct, Dam),</li>
 </ul>
 <p>so as to maximise the weighted yields of the city sites plus the districts' adjacency bonuses, minus the yields of the
 tiles the districts cover. The game's placement rules are enforced partly by which variables exist (sets \(C\) and
-\(R_{d,c}\)) and partly by linear constraints (1)–(6).</p>
+\(R_{d,c}\)) and partly by linear constraints (1)–(8).</p>
 <p>The model is built in three steps, each a list of small functions in <code>model.py</code>:
 <code>VARIABLES</code>, <code>CONSTRAINTS</code>, <code>OBJECTIVE</code>. Commenting out a line drops that constraint or term;
 each run's log lists the ones that were on.</p>
@@ -84,6 +84,15 @@ $$ \delta(t,u) \;=\; \min_{s\in\{-W,\,0,\,W\}} \tfrac12\Big(|q_t^{(s)}-q_u| + |y
 $$ N_r(t) \;=\; \{\,u\in T \;:\; 1\le \delta(t,u)\le r\,\}, \qquad |N_1(t)|\le 6,\ |N_2(t)|\le 18,\ |N_3(t)|\le 36. $$
 Only revealed tiles are in \(N_r\); \(t\) itself is not. <span class="muted"><code>GameMap.within</code>,
 <code>GameMap.neighbours</code> (the latter uses the neighbour list the game reported).</span></div>
+<div class="def"><b>River edges.</b> Each tile has six edges, one per direction \(0..5\) = NE, E, SE, SW, W, NW. The game's
+flags say which side of a river the plot is on: <code>IsWOfRiver</code> (dump field <code>river_w</code>) means the plot is
+west of a river, so the river runs along its <b>E</b> edge; <code>river_nw</code> its <b>SE</b> edge; <code>river_ne</code> its
+<b>SW</b> edge. Its W, NW and NE edges are the E, SE, SW edges of the neighbour on that side. \(\varepsilon(t)\) is the
+number of river edges of \(t\). <span class="muted"><code>GameMap.river_edge(s)</code>. Checked: the edges agree with the
+game's <code>IsRiver</code> on every tile of both test maps, and every floodplain touches a river.</span></div>
+<div class="def"><b>Rivers.</b> Two tiles facing each other across a river edge are on the same river; consecutive edges
+of one river always share a tile, so the connected components of this relation are the rivers (rivers that meet are
+joined). \(\text{riv}(t)\) is the river of a tile touching one. <span class="muted"><code>GameMap.rivers</code>.</span></div>
 <div class="def"><b>Player and ownership.</b> \(p\) is the local player. \(\text{own}(t)\) is the tile's owner (\(-1\):
 nobody). A tile is <i>available to the player</i> when \(\text{own}(t)\in\{-1,p\}\).</div>
 <div class="def"><b>Reserved tiles.</b> \(P\subseteq T\): tiles holding one of the player's own map tacks (the dump's
@@ -120,12 +129,15 @@ means \(n = |C|\), so only the spacing rule limits how many are founded.</div>
 
 <h2 id="districts">5. Districts and where they may go</h2>
 <div class="def"><b>District types.</b> \(D\) = <code>problem.districts</code>: Campus, Industrial Zone, Commercial Hub, Holy
-Site, Theater, Encampment, Harbor, Aqueduct. (The Entertainment Complex is left out on purpose.) Three subsets, read
-from the <code>Districts</code> table:
+Site, Theater, Encampment, Harbor, Aqueduct, Dam. (The Entertainment Complex is left out on purpose.) Subsets, read
+from the <code>Districts</code> table unless marked:
 <ul>
   <li>\(D^{\text{coast}}\): districts with <code>Coast</code> = 1 (the Harbor);</li>
   <li>\(D^{\text{far}}\): districts with <code>NoAdjacentCity</code> = 1 (the Encampment);</li>
-  <li>\(D^{\text{aq}}\): districts with <code>Aqueduct</code> = 1 (the Aqueduct).</li>
+  <li>\(D^{\text{aq}}\): districts with <code>Aqueduct</code> = 1 (the Aqueduct);</li>
+  <li>\(D^{\text{dam}}\): the Dam (engine rule: no flag in the database);</li>
+  <li>\(D^{\text{pop}}\): specialty districts, <code>RequiresPopulation</code> = 1: all planned districts but the Aqueduct and the
+  Dam. For \(e\in E\), \(\beta_e = |B_e\cap D^{\text{pop}}|\) is the number it already has.</li>
 </ul></div>
 <div class="def"><b>Fresh-water source.</b> \(F\subseteq T\): tiles that touch a river, or have a lake, mountain or oasis
 neighbour. An engine rule for aqueducts, not in the database. <span class="muted"><code>Rules.fresh_water_source</code>.</span></div>
@@ -135,10 +147,13 @@ neighbour. An engine rule for aqueducts, not in the database. <span class="muted
   <li>\(t\) holds no luxury or strategic resource (an engine rule, not in the database);</li>
   <li>if \(d\in D^{\text{coast}}\): \(t\) is a coast (or lake) water tile, available to the player, not a wonder, with at
   least one land neighbour (<code>AdjacentToLand</code>); otherwise \(t\in\Lambda\);</li>
-  <li>if \(d\in D^{\text{far}}\): no neighbour of \(t\) is a city centre, \(N_1(t)\cap K=\emptyset\).</li>
+  <li>if \(d\in D^{\text{far}}\): no neighbour of \(t\) is a city centre, \(N_1(t)\cap K=\emptyset\);</li>
+  <li>if \(d\) has <code>District_RequiredFeatures</code> rows, \(t\)'s feature is one of them (the Dam: floodplains,
+  grassland or plains floodplains); likewise for <code>District_ValidTerrains</code> (none of the planned districts has
+  any);</li>
+  <li>if \(d\in D^{\text{dam}}\): \(\varepsilon(t)\ge 2\), a river along at least two edges (engine rule).</li>
 </ol>
-<span class="muted"><code>Rules.can_place_district</code>. None of the eight planned districts has a
-<code>District_ValidTerrains</code> or <code>District_RequiredFeatures</code> row.</span></div>
+<span class="muted"><code>Rules.can_place_district</code>.</span></div>
 <div class="def"><b>District range.</b> \(\rho_D\) = <code>CITY_MAX_BUY_PLOT_RANGE</code> \(=3\). For a city \(c\in C\cup E\)
 and a district \(d\), the tiles where \(c\)'s district \(d\) may go are
 $$ R_{d,c} \;=\; \begin{cases}
@@ -190,7 +205,7 @@ cities and districts do not (see <a href="#limits">§15</a>).
   <tr><td>Holy Site</td><td>+1 faith per mountain; +2 per natural wonder; +1 per 2 forests; +1 next to Pamukkale; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
   <tr><td>Theater</td><td>+2 culture per wonder; +2 next to an Entertainment Complex, Water Park, Hippodrome or Street Carnival; +2 next to Pamukkale; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
   <tr><td>Harbor</td><td>+2 gold next to the city centre; +1 per sea resource; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
-  <tr><td>Encampment, Aqueduct</td><td>none (the Aqueduct's value is housing, not modelled; it gives the Industrial Zone +2)</td></tr>
+  <tr><td>Encampment, Aqueduct, Dam</td><td>none (the Aqueduct's and Dam's value is housing, not modelled; each gives the Industrial Zone +2)</td></tr>
 </table>
 
 <h2 id="variables">7. Decision variables</h2>
@@ -209,7 +224,7 @@ $$
 <p>Let \(\mathcal{B}\) be the set of pairs \((d,d')\in D\times D\), \(d\ne d'\), such that \(\mathcal{A}_d\) has a one-tile rule
 "\(+\Delta\) of yield \(k\) per neighbouring \(d'\)"; its weighted value is \(b_{d,d'}=\sum w_k\Delta\) over those rules
 (<code>Rules.neighbour_bonuses</code>). With the default districts:
-Industrial Zone next to Aqueduct (+2 production, \(b=4\)) and Commercial Hub next to Harbor (+2 gold, \(b=1\)). For
+Industrial Zone next to Aqueduct or Dam (+2 production each, \(b=4\)) and Commercial Hub next to Harbor (+2 gold, \(b=1\)). For
 \((d,d')\in\mathcal{B}\), a city \(c\) and \(t\in R_{d,c}\) with \(N_1(t)\cap R_{d',c}\ne\emptyset\):</p>
 <div class="card">
 $$
@@ -294,6 +309,19 @@ $$ y_{d,d',c,t} \;\le\; z_{d,c,t}, \qquad y_{d,d',c,t} \;\le\; \sum_{u\in N_1(t)
 <p class="muted">The third row is implied for integer \(z\) (one \(d'\) per city can neighbour one \(d\)) but tightens the
 relaxation: it halved the full maps' solve time (47 → 22 s on continents) without changing the optimal objective.</p>
 
+<h3><span class="tag">(7)</span>One Dam per river · <code>one_dam_per_river</code></h3>
+$$ \sum_{(d,c,t)\in Z:\ d\in D^{\text{dam}},\ \text{riv}(t)=r} z_{d,c,t} \;\le\; \begin{cases} 0 & \text{a Dam already stands on river } r,\\ 1 & \text{otherwise,}\end{cases}
+\qquad \forall\ \text{rivers } r . $$
+<p class="muted">Across all cities, new and existing. Rivers that meet count as one, which may forbid a Dam the game would
+allow on a tributary.</p>
+
+<h3><span class="tag">(8)</span>Population limit · <code>specialty_limit</code></h3>
+$$ \sum_{d\in D^{\text{pop}}}\ \sum_{t\in R_{d,c}} z_{d,c,t} \;\le\; K\,x_c \quad \forall c\in C, \qquad\qquad
+\sum_{d\in D^{\text{pop}}}\ \sum_{t\in R_{d,e}} z_{d,e,t} \;\le\; \max(0,\,K-\beta_e) \quad \forall e\in E . $$
+<p class="muted">The game allows a city \(1+\lfloor(\text{population}-1)/3\rfloor\) specialty districts
+(<code>DISTRICT_POPULATION_REQUIRED_PER</code> = 3). The model uses a fixed \(K\) (<code>problem.max_specialty_districts</code>,
+3, i.e. a city of 7–9 citizens), so each city keeps its best \(K\); the Aqueduct and Dam don't count.</p>
+
 <h2 id="full">10. The full programme</h2>
 <div class="card">
 $$
@@ -307,6 +335,8 @@ $$
 & \textstyle [t\in C]\,x_t + \sum_{(d,c):(d,c,t)\in Z} z_{d,c,t} \le 1 \ \ \forall t\in T && (4)\\
 & z_{d,c,t} + x_{c'} \le 1 \ \ \forall (d,c,t)\in Z,\ d\in D^{\text{far}},\ c'\in C\cap N_1(t)\setminus\{c\} && (5)\\
 & y_{d,d',c,t} \le z_{d,c,t},\ \ y_{d,d',c,t} \le \textstyle\sum_{u\in N_1(t)\cap R_{d',c}} z_{d',c,u},\ \ \sum_t y_{d,d',c,t} \le \sum_{u} z_{d',c,u} && (6)\\
+& \textstyle\sum_{d\in D^{\text{dam}},\,\text{riv}(t)=r} z_{d,c,t} \le 1 \ (0 \text{ if dammed}) \ \ \forall \text{ rivers } r && (7)\\
+& \textstyle\sum_{d\in D^{\text{pop}},\,t} z_{d,c,t} \le K x_c \ \forall c\in C, \qquad \sum_{d\in D^{\text{pop}},\,t} z_{d,e,t} \le \max(0,K-\beta_e) \ \forall e\in E && (8)\\
 & x\in\{0,1\}^{C},\quad z\in\{0,1\}^{Z},\quad y\in[0,1]
 \end{aligned}
 $$
@@ -346,8 +376,9 @@ the values used.</p>
 <table>
   <tr><th>Symbol</th><th>Setting</th><th>Default</th><th>Meaning</th></tr>
   <tr><td>\(n\)</td><td><code>problem.n_cities</code></td><td><code>"max"</code></td><td>New cities to found; <code>"max"</code> means \(|C|\)</td></tr>
-  <tr><td>\(D\)</td><td><code>problem.districts</code></td><td>the eight above</td><td>Districts planned per city</td></tr>
+  <tr><td>\(D\)</td><td><code>problem.districts</code></td><td>the nine above</td><td>Districts planned per city</td></tr>
   <tr><td>\(M\)</td><td><code>problem.max_city_candidates</code></td><td>400</td><td>Best sites by \(s_c\) kept as \(C\)</td></tr>
+  <tr><td>\(K\)</td><td><code>problem.max_specialty_districts</code></td><td>3</td><td>Specialty districts per city (population limit)</td></tr>
   <tr><td>\(w_k\)</td><td><code>objective.weights</code></td><td>food 1, production 2, gold 0.5, science 2, culture 0.5, faith 0.5</td><td>Value of one unit of each yield (placeholders; science and production first for now)</td></tr>
   <tr><td>\(\sigma\)</td><td><code>objective.site_radius</code></td><td>2</td><td>Radius of the site value</td></tr>
   <tr><td>\(\lambda\)</td><td><code>objective.loss_factor</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
@@ -366,15 +397,18 @@ run's <code>optimisation.log</code>. Status <code>optimal</code> means proven op
 \(|D|(|C|+|E|)\) for (3); at most \(|T|\) for (4); one per pair of Encampment variable and neighbouring site for (5).</p>
 <table>
   <tr><th>Test case (tiles)</th><th>New cities</th><th>\(|C|\)</th><th>Variables</th><th>Rows</th><th>Time</th></tr>
-  <tr><td>continents-revealed (43)</td><td>5</td><td>38</td><td>4,449</td><td>3,496</td><td>0.6 s</td></tr>
-  <tr><td>continents-radius6 (127)</td><td>12</td><td>103</td><td>14,912</td><td>12,776</td><td>2.1 s</td></tr>
-  <tr><td>continents (3,404)</td><td>56</td><td>400</td><td>62,564</td><td>41,397</td><td>22 s</td></tr>
-  <tr><td>shuffle-revealed (43)</td><td>5</td><td>38</td><td>4,419</td><td>3,470</td><td>0.5 s</td></tr>
-  <tr><td>shuffle-radius6 (127)</td><td>12</td><td>109</td><td>15,624</td><td>12,746</td><td>3.1 s</td></tr>
-  <tr><td>shuffle (3,404)</td><td>56</td><td>400</td><td>65,238</td><td>41,894</td><td>32 s</td></tr>
+  <tr><td>continents-revealed (43)</td><td>5</td><td>38</td><td>4,797</td><td>4,088</td><td>0.8 s</td></tr>
+  <tr><td>continents-radius6 (127)</td><td>12</td><td>103</td><td>16,089</td><td>14,669</td><td>4.2 s</td></tr>
+  <tr><td>continents (3,404)</td><td>56</td><td>400</td><td>65,032</td><td>45,824</td><td>19 s</td></tr>
+  <tr><td>shuffle-revealed (43)</td><td>5</td><td>38</td><td>4,990</td><td>4,324</td><td>1.7 s</td></tr>
+  <tr><td>shuffle-radius6 (127)</td><td>12</td><td>109</td><td>17,369</td><td>15,425</td><td>3.4 s</td></tr>
+  <tr><td>shuffle (3,404)</td><td>56</td><td>400</td><td>69,373</td><td>48,319</td><td>58 s</td></tr>
 </table>
-<p class="muted">Default settings; all proven optimal (gap 0); about 65 s for all six. In every plan each Industrial
-Zone sits next to its city's Aqueduct. Logs: <code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code>.
+<p class="muted">Default settings; all proven optimal (gap 0); about 90 s for all six. Each log ends with metrics
+(<code>metrics.py</code>): districts per city, and per district type its count, the share of cities that have one and its
+mean adjacency. On continents, with 3 specialty districts per city: 4.0 districts per city; an Industrial Zone in 96% of
+cities (mean +3.8 production), a Campus in 88% (+3.1 science), an Aqueduct in 84%, a Commercial Hub in 45%, a Harbor in
+43%, a Holy Site in 23%, a Dam in 16%; Encampments and Theaters almost never (2–4%). Logs: <code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code>.
 A live game's revealed area is the size of the first rows: under a second.</p>
 
 <h2 id="limits">15. Not modelled</h2>
@@ -388,12 +422,15 @@ A live game's revealed area is the size of the first rows: under a second.</p>
   <li><b>Tile ownership and timing.</b> In the game a district goes on a tile its city owns; borders grow over time or
   through bought tiles, and a tile belongs to one city. The model allows any free tile within 3 and lets a district sit
   in another planned city's range.</li>
-  <li><b>Population.</b> A city may have one district per 3 citizens (plus one); the plan gives every city all of them.</li>
+  <li><b>Population over time.</b> Every city gets the same \(K\) specialty districts; in the game the limit grows with
+  population, and which city grows how big (food, housing) is not modelled.</li>
   <li><b>Site value is a proxy.</b> No housing (fresh water, coast), amenities, growth over time or future improvements;
   sites of cities 4 apart can count the same tile twice.</li>
-  <li><b>Aqueduct housing</b>: the Aqueduct's own value (housing) is not counted; it is placed for its bonus and the
-  district bonus. It is also planned for cities already on fresh water.</li>
-  <li><b>Other districts</b>: Entertainment Complex (left out on purpose), Dam, Canal, Government Plaza,
+  <li><b>Aqueduct and Dam housing</b>: their own value (housing, and the Dam's flood protection) is not counted; they
+  are placed for the Industrial Zone bonus and the district bonus. The Aqueduct is also planned for cities already on
+  fresh water.</li>
+  <li><b>Rivers that meet</b> count as one river for the one-Dam rule.</li>
+  <li><b>Other districts</b>: Entertainment Complex (left out on purpose), Canal, Government Plaza,
   Diplomatic Quarter, Spaceport, Aerodrome, Neighborhood, Preserve, Water Park; civilisation-unique districts; wonders;
   improvements.</li>
   <li><b>Technology- or civic-gated adjacency</b>, and civilisation or leader bonuses.</li>

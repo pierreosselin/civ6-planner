@@ -17,7 +17,7 @@ import os
 import random
 from typing import Any, Callable
 
-from . import config, dataset, model, planner, viewer
+from . import config, dataset, metrics, model, planner, viewer
 from .gamemap import GameMap
 from .model import Plan
 from .planner import Tack
@@ -69,6 +69,7 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         record = {"name": name, "description": describe(d), "tiles": len(gmap),
                   "score": round(score, 2), "score_parts": parts,
                   "config": {"files": cfg.sources, **cfg.raw}, "solver": p.info,
+                  "metrics": metrics.plan_metrics(gmap, rules, p),
                   "tacks": [_tack_record(gmap, t) for t in planned], "notes": notes,
                   "map": f"{name}/map.html", "log": f"{name}/optimisation.log"}
         with open(os.path.join(sc_dir, "decisions.json"), "w") as f:
@@ -106,6 +107,7 @@ def _log(name: str, d: dict[str, Any], method: str, seed: int, p: Plan, record: 
                   f"  size           " + ", ".join(f"{k} {v}" for k, v in p.info.items() if k != "objective"),
                   "", rule, "HiGHS log (it minimises -objective; objective = score + bonuses)", rule,
                   p.log.rstrip(), rule, ""]
+    lines += ["Metrics"] + [f"  {line}" for line in metrics.format_metrics(record["metrics"])] + [""]
     lines += ["Decisions"] + [f"  {n}" for n in record["notes"]]
     lines += ["", "Tacks"] + [f"  {t['name']:<8} ({t['x']}, {t['y']})  {t['tile']}  adds {t['yields'] or '-'}"
                               for t in record["tacks"]]

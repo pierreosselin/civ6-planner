@@ -4,14 +4,19 @@ Recommends Civ VI (Gathering Storm) city, district and improvement placement fro
 map the player has revealed, and shows the plan in game as map tacks. The goal is an
 optimiser that maximises yields under the game's placement rules. The MIP
 (`model.py`) places as many cities as fit (`n_cities = "max"`), each with a Campus,
-Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, (on coast) Harbor and
-Aqueduct (next to the centre and fresh water), and gives the player's existing cities
-the ones they lack. Bonuses between a city's own planned districts (Industrial Zone next
-to Aqueduct, Commercial Hub next to Harbor) are modelled with `y` variables. Tacks are named per city
+Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, (on coast) Harbor,
+Aqueduct (next to the centre and fresh water) and Dam (floodplains with a river on 2+
+edges, one per river), and gives the player's existing cities the ones they lack.
+At most 3 specialty districts per city (`problem.max_specialty_districts`; the game's
+population limit, RequiresPopulation; Aqueduct and Dam don't count), so the weights
+decide which ones each city gets. Bonuses between a city's own planned districts (Industrial Zone next to Aqueduct/Dam,
+Commercial Hub next to Harbor) are modelled with `y` variables. Each run's log ends
+with metrics (`metrics.py`: districts per city, share of cities with each district
+type, mean adjacency per type). Tacks are named per city
 ("City C1", "Campus C1", "Campus Rome");
 Entertainment Complex left out on purpose. Objective: site yields + district
 adjacency − covered tiles, science and production weighted 2 for now. All test
-cases solve to optimal in ~65 s in total (full maps 20–30 s; city spacing written as
+cases solve to optimal in ~90 s in total (full maps 20–60 s; city spacing written as
 clique constraints, which made that possible). Kept simple on purpose: other adjacency
 between *planned* districts ("+1 per 2 districts", across cities) isn't modelled
 yet, because general coupling constraints made HiGHS slow.
@@ -33,7 +38,7 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
   score any plan), `config.py` (loads the settings), `solver.py` (small MIP modelling layer over
   HiGHS via `scipy.optimize.milp`, captures the HiGHS log), `tacks.py` (writes the
   plan), `dataset.py` (test maps and masks), `viewer.py` (HTML view), `results.py`
-  (results folders), `cli.py`.
+  (results folders), `metrics.py` (plan statistics for the logs), `cli.py`.
 - `config/default.toml`: every model and solver parameter (cities and districts to
   plan, yield weights, bonuses, site radius, loss factor, HiGHS options). `--config FILE`
   on plan/watch/view/results overlays a file that sets only what it changes (e.g.
@@ -108,8 +113,12 @@ Geometry (verified against the game's own adjacency, 282/282 pairs):
   ("odd-r"). Maps wrap east–west (assumed; `GameMap(wrap_x=True)`).
 - `neighbours` = plot indices in direction order 0..5 = NE, E, SE, SW, W, NW
   (-1 off map). For even y: NE=(x,y+1), NW=(x-1,y+1); odd y: NE=(x+1,y+1), NW=(x,y+1).
-- River/cliff flags cover only this plot's W, NW and NE edges; the other three edges
-  are on the neighbours' flags.
+- River/cliff flags say which side of the river the plot is on: `river_w` (IsWOfRiver)
+  = the plot is *west of* a river, so the river runs along its **E** edge; `river_nw`
+  → its **SE** edge; `river_ne` → its **SW** edge. Its W, NW, NE edges are on the
+  neighbours' flags (`GameMap.river_edge`). Earlier code read them as W/NW/NE edges
+  (mirrored); fixed 2026-11-10, checked against `IsRiver` on every tile (0 mismatches)
+  and floodplains (all touch a river).
 
 ## Rules data
 
@@ -197,7 +206,7 @@ core). Detailed Map Tacks only shows a tack's adjacency after `LuaEvents.DMT_Map
   classes (`GameMap`, `Rules`, `Config`, `Plan`, `Model`, `Instance`), never `object`;
   shared aliases: `Tile`, `XY` (gamemap.py), `Yields` (config.py), `Var` (solver.py),
   `AdjacencyRule` (rules.py). Check with
-  `uvx mypy --ignore-missing-imports --check-untyped-defs src/civ6_planner/{model,planner,config,solver,gamemap,rules,results}.py`.
+  `uvx mypy --ignore-missing-imports --check-untyped-defs src/civ6_planner/{model,planner,config,solver,gamemap,rules,results,metrics}.py`.
 
 - The old `Mods/MapExtractorMod` (an earlier attempt) is still installed but disabled
   in game; leave it unless Pierre asks.
