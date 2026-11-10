@@ -14,176 +14,396 @@
   :root[data-theme="dark"] { --bg:#1a1a19; --panel:#242422; --ink:#f0efec; --muted:#a3a29b; --line:#3a3a37; --accent:#8fb0ec; --note:#3a3322; }
   * { box-sizing:border-box; }
   body { margin:0; padding:32px 16px 64px; font:16px/1.6 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
-  main { max-width:860px; margin:0 auto; }
+  main { max-width:880px; margin:0 auto; }
   h1 { font-size:26px; margin:0 0 4px; }
-  h2 { font-size:19px; margin:36px 0 8px; padding-top:12px; border-top:1px solid var(--line); }
+  h2 { font-size:19px; margin:40px 0 8px; padding-top:12px; border-top:1px solid var(--line); }
+  h3 { font-size:16px; margin:24px 0 6px; }
   .muted { color:var(--muted); font-size:14px; }
   code { font:13.5px ui-monospace, monospace; background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:0 4px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:4px 18px; margin:12px 0; overflow-x:auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 18px; margin:12px 0; overflow-x:auto; }
   .note { background:var(--note); border-radius:8px; padding:10px 14px; margin:12px 0; font-size:15px; }
+  .def { border-left:3px solid var(--accent); padding:2px 0 2px 14px; margin:12px 0; }
+  .def > b:first-child { color:var(--accent); }
   table { border-collapse:collapse; width:100%; font-size:14.5px; margin:8px 0; }
   th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { color:var(--muted); font-weight:600; font-size:13px; }
-  .tag { display:inline-block; min-width:2.2em; font-weight:700; color:var(--accent); }
-  ul { padding-left:20px; }
+  .tag { display:inline-block; min-width:2.4em; font-weight:700; color:var(--accent); }
+  ul, ol { padding-left:22px; }
+  nav ol { columns:2; font-size:14.5px; margin:8px 0; }
   .katex-display { overflow-x:auto; overflow-y:hidden; padding:4px 0; }
+  @media (max-width:600px) { nav ol { columns:1; } }
 </style></head>
 <body><main>
 
 <h1>Placement model</h1>
-<p class="muted">The MIP the planner solves today (<code>src/civ6_planner/model.py</code>), solved with HiGHS through
-<code>scipy.optimize.milp</code>. Deliberately simple: as many cities as fit, each with up to one of seven districts (Campus, Industrial Zone,
-Commercial Hub, Holy Site, Theater, Encampment, Harbor), optimal in 0.4–15 s on the test maps.</p>
+<p class="muted">The mixed-integer programme the planner solves (<code>src/civ6_planner/model.py</code>), with HiGHS through
+<code>scipy.optimize.milp</code>. Every symbol below is tied to the code that computes it, so this page and the code can be
+checked against each other. Defaults are those of <code>config/default.toml</code>.</p>
 
-<h2>Sets and data</h2>
+<nav><ol>
+  <li><a href="#overview">Overview</a></li>
+  <li><a href="#map">Map, distance, neighbourhoods</a></li>
+  <li><a href="#yields">Yields and tile value</a></li>
+  <li><a href="#cities">Cities: existing and candidate</a></li>
+  <li><a href="#districts">Districts and where they may go</a></li>
+  <li><a href="#adjacency">Adjacency</a></li>
+  <li><a href="#variables">Decision variables</a> (incl. neighbour bonuses)</li>
+  <li><a href="#objective">Objective</a></li>
+  <li><a href="#constraints">Constraints</a></li>
+  <li><a href="#full">The full programme</a></li>
+  <li><a href="#properties">Properties</a></li>
+  <li><a href="#score">Score and evaluation</a></li>
+  <li><a href="#parameters">Parameters</a></li>
+  <li><a href="#solving">Solving, size and times</a></li>
+  <li><a href="#limits">Not modelled</a></li>
+</ol></nav>
+
+<h2 id="overview">1. Overview</h2>
+<p>Given the map the player has revealed, the model chooses</p>
+<ul>
+  <li>tiles on which to found <b>new cities</b> (by default as many as fit), and</li>
+  <li>for each new city and each of the player's <b>existing cities</b>, a tile for each planned <b>district</b> it does not
+  have yet (Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor, Aqueduct),</li>
+</ul>
+<p>so as to maximise the weighted yields of the city sites plus the districts' adjacency bonuses, minus the yields of the
+tiles the districts cover. The game's placement rules are enforced partly by which variables exist (sets \(C\) and
+\(R_{d,c}\)) and partly by linear constraints (1)–(6).</p>
+<p>The model is built in three steps, each a list of small functions in <code>model.py</code>:
+<code>VARIABLES</code>, <code>CONSTRAINTS</code>, <code>OBJECTIVE</code>. Commenting out a line drops that constraint or term;
+each run's log lists the ones that were on.</p>
+
+<h2 id="map">2. Map, distance, neighbourhoods</h2>
+<div class="def"><b>Tiles.</b> \(T\) is the set of tiles in the map dump: the tiles revealed to the player
+(<code>GameMap.tiles</code>). A tile \(t\) has offset coordinates \((x_t, y_t)\), \(0\le x_t &lt; W\), \(0\le y_t &lt; H\), with
+\(y\) growing northwards and odd rows shifted half a hex east ("odd-r"). The map wraps east–west.</div>
+<div class="def"><b>Hex distance.</b> With axial coordinates \(q(x,y) = x - (y - (y \bmod 2))/2\) and \(r = y\):
+$$ \delta(t,u) \;=\; \min_{s\in\{-W,\,0,\,W\}} \tfrac12\Big(|q_t^{(s)}-q_u| + |y_t-y_u| + |q_t^{(s)}+y_t-q_u-y_u|\Big),
+\qquad q_t^{(s)} = q(x_t+s,\,y_t). $$
+<span class="muted"><code>GameMap.distance</code>; checked against the game's own neighbour lists (282/282 pairs).</span></div>
+<div class="def"><b>Neighbourhoods.</b> For \(r\ge1\),
+$$ N_r(t) \;=\; \{\,u\in T \;:\; 1\le \delta(t,u)\le r\,\}, \qquad |N_1(t)|\le 6,\ |N_2(t)|\le 18,\ |N_3(t)|\le 36. $$
+Only revealed tiles are in \(N_r\); \(t\) itself is not. <span class="muted"><code>GameMap.within</code>,
+<code>GameMap.neighbours</code> (the latter uses the neighbour list the game reported).</span></div>
+<div class="def"><b>Player and ownership.</b> \(p\) is the local player. \(\text{own}(t)\) is the tile's owner (\(-1\):
+nobody). A tile is <i>available to the player</i> when \(\text{own}(t)\in\{-1,p\}\).</div>
+<div class="def"><b>Reserved tiles.</b> \(P\subseteq T\): tiles holding one of the player's own map tacks (the dump's
+<code>PIN</code> records; the planner's <code>[MD]</code> tacks are not included). Nothing is planned on them.</div>
+
+<h2 id="yields">3. Yields and tile value</h2>
+<div class="def"><b>Yields.</b> \(Y = \{\text{food}, \text{production}, \text{gold}, \text{science}, \text{culture},
+\text{faith}\}\). \(y_{t,k}\ge0\) is the yield \(k\) of tile \(t\) as the game reports it (terrain, feature, visible
+resource, improvement).</div>
+<div class="def"><b>Weights.</b> \(w_k\ge0\), the value of one unit of yield \(k\) (<code>objective.weights</code>; default
+food 1, production 2, gold 0.5, science 2, culture 0.5, faith 0.5). For any yield vector \(\eta\),
+$$ v(\eta) = \sum_{k\in Y} w_k\,\eta_k, \qquad v(t) = v(y_{t,\cdot}). $$
+<span class="muted"><code>Config.weighted</code>.</span></div>
+<div class="def"><b>Site value</b> of a city on \(c\), with site radius \(\sigma\) (<code>objective.site_radius</code>, 2):
+$$ s_c \;=\; v(c) + \sum_{u\in N_\sigma(c)} v(u). $$
+<span class="muted"><code>site_value</code>. A proxy for what the city can work: the centre and the 18 tiles within 2.</span></div>
+
+<h2 id="cities">4. Cities: existing and candidate</h2>
+<div class="def"><b>Known cities.</b> \(K\subseteq T\): every revealed city centre (any player), i.e. tiles with
+<code>is_city</code>, plus the player's own cities. <span class="muted"><code>GameMap.city_positions</code>.</span></div>
+<div class="def"><b>Existing cities</b> \(E\subseteq K\): the player's cities, from the dump's <code>CITY</code> records.
+For \(e\in E\), \(B_e\) is the set of district types it already has: the districts on tiles \(t\) with
+\(\text{own}(t)=p\) whose owning city (the tile's <code>city</code> field) is \(e\).
+<span class="muted"><code>existing_cities</code>.</span></div>
+<div class="def"><b>Open land.</b> \(\Lambda\subseteq T\): tiles that are not water, not mountain, not impassable, not a
+natural wonder, hold no wonder, and are available to the player. <span class="muted"><code>Rules._open_land</code>.</span></div>
+<div class="def"><b>Candidate sites.</b> With the minimum city distance \(\rho = \)<code>CITY_MIN_RANGE</code> \(=3\) from the
+game database,
+$$ C^0 = \{\, t\in\Lambda\setminus P \;:\; \text{feature}(t)\ \text{allows settling},\ \ \delta(t,k) &gt; \rho\ \ \forall k\in K \,\}. $$
+\(C\subseteq C^0\) keeps the \(M\) tiles with the largest \(s_c\) (<code>problem.max_city_candidates</code>, 400).
+<span class="muted"><code>Rules.can_found_city</code>, <code>prepare</code>. "Allows settling": <code>Features.Settlement</code> \(\ne 0\).</span></div>
+<div class="def"><b>Number of new cities.</b> \(n\in\mathbb{N}\) (<code>problem.n_cities</code>); the default <code>"max"</code>
+means \(n = |C|\), so only the spacing rule limits how many are founded.</div>
+
+<h2 id="districts">5. Districts and where they may go</h2>
+<div class="def"><b>District types.</b> \(D\) = <code>problem.districts</code>: Campus, Industrial Zone, Commercial Hub, Holy
+Site, Theater, Encampment, Harbor, Aqueduct. (The Entertainment Complex is left out on purpose.) Three subsets, read
+from the <code>Districts</code> table:
+<ul>
+  <li>\(D^{\text{coast}}\): districts with <code>Coast</code> = 1 (the Harbor);</li>
+  <li>\(D^{\text{far}}\): districts with <code>NoAdjacentCity</code> = 1 (the Encampment);</li>
+  <li>\(D^{\text{aq}}\): districts with <code>Aqueduct</code> = 1 (the Aqueduct).</li>
+</ul></div>
+<div class="def"><b>Fresh-water source.</b> \(F\subseteq T\): tiles that touch a river, or have a lake, mountain or oasis
+neighbour. An engine rule for aqueducts, not in the database. <span class="muted"><code>Rules.fresh_water_source</code>.</span></div>
+<div class="def"><b>Valid tiles</b> \(V_d\subseteq T\) for district \(d\): \(t\in V_d\) if and only if
+<ol>
+  <li>\(t\) holds no city and no district, and \(t\notin P\);</li>
+  <li>\(t\) holds no luxury or strategic resource (an engine rule, not in the database);</li>
+  <li>if \(d\in D^{\text{coast}}\): \(t\) is a coast (or lake) water tile, available to the player, not a wonder, with at
+  least one land neighbour (<code>AdjacentToLand</code>); otherwise \(t\in\Lambda\);</li>
+  <li>if \(d\in D^{\text{far}}\): no neighbour of \(t\) is a city centre, \(N_1(t)\cap K=\emptyset\).</li>
+</ol>
+<span class="muted"><code>Rules.can_place_district</code>. None of the eight planned districts has a
+<code>District_ValidTerrains</code> or <code>District_RequiredFeatures</code> row.</span></div>
+<div class="def"><b>District range.</b> \(\rho_D\) = <code>CITY_MAX_BUY_PLOT_RANGE</code> \(=3\). For a city \(c\in C\cup E\)
+and a district \(d\), the tiles where \(c\)'s district \(d\) may go are
+$$ R_{d,c} \;=\; \begin{cases}
+\big(N_{\rho_D}(c)\cap V_d\big)\setminus N_1(c) & d\in D^{\text{far}},\\[2pt]
+N_1(c)\cap V_d\cap F & d\in D^{\text{aq}}\ \ \text{(next to its own city centre and fresh water)},\\[2pt]
+N_{\rho_D}(c)\cap V_d & \text{otherwise,}
+\end{cases} $$
+defined for every \(d\in D\) if \(c\in C\), and for \(d\in D\setminus B_c\) if \(c\in E\) (a city never gets a second
+district of a type it has). <span class="muted"><code>prepare</code> (<code>spots</code>).</span></div>
+
+<h2 id="adjacency">6. Adjacency</h2>
+<p>Each district type \(d\) has a set of adjacency rules \(\mathcal{A}_d\) read from the game database
+(<code>District_Adjacencies</code> joined with <code>Adjacency_YieldChanges</code>; <code>Rules._read_adjacencies</code>). Rules
+that need a technology or civic (or are made obsolete by one), <code>Self</code> rules and rules naming one specific
+resource are left out, so the rules kept are those that hold from the start of the game.</p>
+<p>A rule \(\alpha\in\mathcal{A}_d\) is a tuple \((k_\alpha, \Delta_\alpha, m_\alpha, \pi_\alpha)\): yield type, change per
+step, tiles per step, and a predicate \(\pi_\alpha(u;\Pi)\) on a neighbouring tile \(u\), given a set \(\Pi\) of planned
+cities and districts (a map from tiles to district types, a city being <code>DISTRICT_CITY_CENTER</code>). Its count on
+tile \(t\) is
+$$ \text{cnt}_\alpha(t;\Pi) \;=\; \begin{cases}
+[\,t \text{ touches a river}\,] & \text{river rules,}\\
+\big|\{\,u\in N_1(t) \;:\; \pi_\alpha(u;\Pi)\,\}\big| & \text{otherwise,}
+\end{cases} $$
+and the bonus of district \(d\) on \(t\) in yield \(k\) is
+$$ A_{d,k}(t;\Pi) \;=\; \sum_{\alpha\in\mathcal{A}_d:\,k_\alpha=k} \Delta_\alpha \left\lfloor \frac{\text{cnt}_\alpha(t;\Pi)}{m_\alpha}\right\rfloor . $$
+<span class="muted"><code>Rules.adjacency</code> returns \(\big(A_{d,k}(t;\Pi)\big)_{k}\); these are the "+n" badges on tacks.</span></p>
 <table>
-  <tr><th>Symbol</th><th>Meaning</th><th>From</th></tr>
-  <tr><td>\(T\)</td><td>Revealed tiles of the map</td><td><code>GameMap</code></td></tr>
-  <tr><td>\(C \subseteq T\)</td><td>Candidate city sites: open land (not water, mountain, impassable, wonder; unowned or ours), feature allows settling, more than <code>CITY_MIN_RANGE</code> = 3 from every known city. No tile holding one of the player's own map tacks. Only the 400 best by site value \(s_c\) are kept.</td><td><code>Rules.can_found_city</code></td></tr>
-  <tr><td>\(E\)</td><td>The player's existing cities (from the dump's city list); they get the districts they don't
-  have yet. \(D_e\subseteq D\): the planned districts city \(e\) lacks (it owns no tile holding that district)</td><td><code>existing_cities</code></td></tr>
-  <tr><td>\(D\)</td><td>District types to place per city: Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor (Entertainment Complex left out)</td><td><code>problem.districts</code></td></tr>
-  <tr><td>\(V_d\subseteq T\)</td><td>Tiles district \(d\) may go on: no city or district yet, no map tack of the player's, not a luxury or strategic resource, and
-  open land; for the Harbor (<code>Districts.Coast</code>) a coast or lake tile next to land instead. The Encampment
-  (<code>NoAdjacentCity</code>) also stays off tiles next to an existing city.</td><td><code>Rules.can_place_district</code></td></tr>
-  <tr><td>\(D^{\text{far}}\subseteq D\)</td><td>Districts that may not touch a city centre: the Encampment</td><td><code>Rules.no_adjacent_city</code></td></tr>
-  <tr><td>\(N_r(t)\)</td><td>Revealed tiles at hex distance \(1..r\) from \(t\) (map wraps east–west)</td><td><code>GameMap.within</code></td></tr>
-  <tr><td>\(R_{d,c}\)</td><td>\(N_3(c)\cap V_d\): where city \(c\)'s district \(d\) may go (<code>CITY_MAX_BUY_PLOT_RANGE</code> = 3),
-  minus \(N_1(c)\) for \(d\in D^{\text{far}}\)</td><td></td></tr>
-  <tr><td>\(Y\)</td><td>Yield types: food, production, gold, science, culture, faith</td><td></td></tr>
-  <tr><td>\(y_{t,k}\)</td><td>Yield \(k\) of tile \(t\) as the game reports it (resources included)</td><td>map dump</td></tr>
-  <tr><td>\(n\)</td><td>Number of cities to found; default <code>"max"</code>, i.e. \(|C|\): as many as fit</td><td><code>problem.n_cities</code></td></tr>
-  <tr><td>\(\mathcal{K}\)</td><td>Spacing cliques: for each triangle of three touching tiles, the candidates on or next to it
-  (all within 3 of each other)</td><td><code>city_spacing</code></td></tr>
+  <tr><th>Predicate \(\pi_\alpha(u;\Pi)\)</th><th>Database column</th><th>True when</th></tr>
+  <tr><td>any district</td><td><code>OtherDistrictAdjacent</code></td><td>\(u\) holds a district or city centre, or \(u\in\Pi\)</td></tr>
+  <tr><td>district \(d'\)</td><td><code>AdjacentDistrict</code></td><td>\(u\) holds \(d'\) (a city counts as <code>DISTRICT_CITY_CENTER</code>), or \(\Pi(u)=d'\)</td></tr>
+  <tr><td>terrain, feature, improvement</td><td><code>AdjacentTerrain</code>, <code>AdjacentFeature</code>, <code>AdjacentImprovement</code></td><td>\(u\) has it</td></tr>
+  <tr><td>resource class</td><td><code>AdjacentResourceClass</code></td><td>\(u\)'s visible resource is of that class (e.g. strategic)</td></tr>
+  <tr><td>sea resource</td><td><code>AdjacentSeaResource</code></td><td>\(u\) is water with a visible resource</td></tr>
+  <tr><td>wonder, natural wonder</td><td><code>AdjacentWonder</code>, <code>AdjacentNaturalWonder</code></td><td>\(u\) holds one</td></tr>
+  <tr><td>river</td><td><code>AdjacentRiver</code></td><td>the district's own tile \(t\) touches a river (counted once)</td></tr>
+</table>
+<div class="def"><b>Adjacency coefficient used by the MIP.</b> For \((d,c,t)\) with \(t\in R_{d,c}\), the planned set holds
+only the district's own city centre:
+$$ a_{d,c,t} \;=\; v\Big(A_{d,\cdot}\big(t;\ \{c\mapsto \text{city centre}\}\big)\Big) \;=\; \sum_{k\in Y} w_k\, A_{d,k}\big(t;\{c\mapsto\text{city centre}\}\big). $$
+It is a constant computed before solving, so the floors are exact. Existing cities and districts of every player count
+through the map. Planned districts of the same city count only through the neighbour bonuses of §7; other planned
+cities and districts do not (see <a href="#limits">§15</a>).
+<span class="muted"><code>adjacency_term</code>.</span></div>
+<table>
+  <tr><th>District</th><th>Rules kept (Gathering Storm database)</th></tr>
+  <tr><td>Campus</td><td>+1 science per mountain; +1 per 2 rainforest; +2 per reef, Great Barrier Reef, geothermal fissure, Pamukkale; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
+  <tr><td>Industrial Zone</td><td>+1 production per quarry or strategic resource; +1 per 2 mines or lumber mills; +2 per Aqueduct, Bath, Dam, Canal; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
+  <tr><td>Commercial Hub</td><td>+2 gold on a river; +2 next to a Harbor, Cothon or Royal Navy Dockyard; +2 next to Pamukkale; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
+  <tr><td>Holy Site</td><td>+1 faith per mountain; +2 per natural wonder; +1 per 2 forests; +1 next to Pamukkale; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
+  <tr><td>Theater</td><td>+2 culture per wonder; +2 next to an Entertainment Complex, Water Park, Hippodrome or Street Carnival; +2 next to Pamukkale; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
+  <tr><td>Harbor</td><td>+2 gold next to the city centre; +1 per sea resource; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
+  <tr><td>Encampment, Aqueduct</td><td>none (the Aqueduct's value is housing, not modelled; it gives the Industrial Zone +2)</td></tr>
 </table>
 
-<h2>Derived coefficients</h2>
-<p>Weighted value of a yield vector, with weights \(w_k\) (placeholders, see Parameters):</p>
-$$ v(t) \;=\; \sum_{k\in Y} w_k\, y_{t,k} $$
-<p>Site value of a city on \(c\): its centre plus every revealed tile within 2.</p>
-$$ s_c \;=\; v(c) + \sum_{t \in N_2(c)} v(t) $$
-<p>Adjacency of district \(d\) on tile \(t\) for the city on \(c\), from the game database
-(<code>District_Adjacencies</code>, see the table below). For each rule \(\rho\) of \(d\) giving \(\delta_\rho\) of yield
-\(k_\rho\) per \(m_\rho\) matching neighbours, with \(\text{cnt}_\rho(t; c)\) the matching neighbours of \(t\):</p>
-$$ a_{d,c,t} \;=\; \sum_{\rho} w_{k_\rho}\,\delta_\rho \left\lfloor \frac{\text{cnt}_\rho(t; c)}{m_\rho} \right\rfloor $$
-<p>Neighbours count as districts when they already hold a city or a district, or when they are \(c\) itself (the planned
-city centre). That is why \(a\) depends on \(c\). The floor is exact because \(a_{d,c,t}\) is a constant computed before
-solving.</p>
-<p>Objective coefficient of placing district \(d\) of city \(c\) on \(t\):</p>
-$$ g_{d,c,t} \;=\; a_{d,c,t} \;-\; \lambda\, v(t) \;+\; \beta_D $$
-
-<h2>Decision variables</h2>
-<p class="muted">In <code>model.py</code>: \(x\) is <code>city_vars</code>, \(z\) is <code>district_vars</code>. The model is built from three lists,
-<code>VARIABLES</code>, <code>CONSTRAINTS</code> and <code>OBJECTIVE</code>, with one function per variable family, constraint and
-objective term; comment out a line to drop that constraint or term.</p>
+<h2 id="variables">7. Decision variables</h2>
+<p>With the index set of district assignments
+$$ Z \;=\; \{\,(d,c,t) \;:\; c\in C,\ d\in D,\ t\in R_{d,c}\,\} \;\cup\; \{\,(d,e,t) \;:\; e\in E,\ d\in D\setminus B_e,\ t\in R_{d,e}\,\}, $$</p>
+<div class="card">
 $$
 \begin{aligned}
-x_c &\in \{0,1\} && c \in C && \text{found a city on } c\\
-z_{d,c,t} &\in \{0,1\} && d\in D,\; c\in C,\; t \in R_{d,c} && \text{district } d \text{ of city } c \text{ goes on } t
+x_c &\in \{0,1\} && c \in C && \text{found a new city on } c && \texttt{city\_vars}\\
+z_{d,c,t} &\in \{0,1\} && (d,c,t)\in Z && \text{city } c\text{'s district } d \text{ goes on } t && \texttt{district\_vars}
 \end{aligned}
 $$
-
-<h2>Objective</h2>
-$$
-\max \;\; \sum_{c\in C} \big(s_c + \beta_C\big)\, x_c \;+\; \sum_{d\in D}\sum_{c\in C}\sum_{t\in R_{d,c}} g_{d,c,t}\; z_{d,c,t}
-$$
-<p class="muted">Terms, in <code>OBJECTIVE</code>: \(s_c x_c\) <code>site_term</code>, \(a_{d,c,t} z\) <code>adjacency_term</code>,
-\(-\lambda v(t) z\) <code>covered_tile_term</code>, \(\beta_C x\) <code>city_bonus_term</code>, \(\beta_D z\) <code>district_bonus_term</code>.</p>
-<p>The reported <b>score</b> leaves the bonuses out: site value + adjacency − \(\lambda\,v\)(covered tiles).
-\(\beta_C\) and \(\beta_D\) are large enough that cities and districts are always placed when they can be.</p>
-
-<h2>Constraints</h2>
-<div class="card">
-<p><span class="tag">(1)</span>Number of cities · <code>max_cities</code></p>
-$$ \sum_{c\in C} x_c \;\le\; n $$
-<p><span class="tag">(2)</span>City spacing (only added when \(n>1\)) · <code>city_spacing</code></p>
-$$ \sum_{c\in K} x_c \;\le\; 1 \qquad \forall\, K\in\mathcal{K} $$
-<p class="muted">Every pair of candidates within 3 of each other lies in some clique \(K\), so this says the same as
-\(x_a + x_b \le 1\) for each such pair, with a much tighter relaxation. With many cities the pairwise form left HiGHS
-proving the packing for minutes; the clique form solves the full maps in 10–15 s. Pairs no clique covers (around
-unrevealed tiles) keep a pairwise row.</p>
-<p><span class="tag">(3)</span>At most one district of each type per city, and only if the city is founded · <code>district_needs_city</code></p>
-$$ \sum_{t\in R_{d,c}} z_{d,c,t} \;\le\; x_c \quad \forall\, d\in D,\ c\in C \qquad\qquad \sum_{t\in R_{d,e}} z_{d,e,t} \;\le\; 1 \quad \forall\, e\in E,\ d\in D_e $$
-<p class="muted">Variables \(z_{d,e,t}\) for existing cities are created like those of new cities (same \(R_{d,e}\), same
-objective coefficient); their centre is already on the map, so it counts in adjacency without being planned.</p>
-<p><span class="tag">(4)</span>One thing per tile · <code>one_thing_per_tile</code></p>
-$$ x_t\,[t\in C] \;+\; \sum_{d\in D}\ \sum_{c\,:\,t\in R_{d,c}} z_{d,c,t} \;\le\; 1 \qquad \forall\, t\in T $$
-<p><span class="tag">(5)</span>No Encampment next to another planned city · <code>not_next_to_planned_city</code></p>
-$$ z_{d,c,t} + x_{c'} \;\le\; 1 \qquad \forall\, d\in D^{\text{far}},\ t\in R_{d,c},\ c'\in N_1(t)\cap C,\ c'\ne c $$
 </div>
-<p>Placement rules (terrain, resources, ownership, existing cities) are applied by not creating the variable at all,
-through \(C\) and \(V\).</p>
+<p>Existing cities have no \(x\) variable: they are always there.</p>
+<h3>Neighbour bonuses between planned districts of one city</h3>
+<p>Let \(\mathcal{B}\) be the set of pairs \((d,d')\in D\times D\), \(d\ne d'\), such that \(\mathcal{A}_d\) has a one-tile rule
+"\(+\Delta\) of yield \(k\) per neighbouring \(d'\)"; its weighted value is \(b_{d,d'}=\sum w_k\Delta\) over those rules
+(<code>Rules.neighbour_bonuses</code>). With the default districts:
+Industrial Zone next to Aqueduct (+2 production, \(b=4\)) and Commercial Hub next to Harbor (+2 gold, \(b=1\)). For
+\((d,d')\in\mathcal{B}\), a city \(c\) and \(t\in R_{d,c}\) with \(N_1(t)\cap R_{d',c}\ne\emptyset\):</p>
+<div class="card">
+$$
+\begin{aligned}
+y_{d,d',c,t} &\in [0,1] && \text{city } c\text{'s } d \text{ on } t \text{ gets the bonus from } c\text{'s } d' && \texttt{neighbour\_bonus\_vars}
+\end{aligned}
+$$
+</div>
+<p class="muted">Continuous: with the links (6) and a positive objective coefficient, at an optimum
+\(y=\min\big(z_{d,c,t},\ \sum_{u} z_{d',c,u}\big)\in\{0,1\}\). Only the city's own \(d'\) is counted: one per city, so the
+count is 0 or 1 and the rule's floor is exact.</p>
 
-<h2>Adjacency rules used</h2>
-<p class="muted">Read from <code>DebugGameplay.sqlite</code> at run time (<code>Rules._read_adjacencies</code>) for every planned
-district. Kept: neighbouring terrain, feature, district (any, or a given type), improvement, resource class, sea
-resource, wonder, natural wonder, and a river on the district's own tile. Left out: rules needing a tech or civic (or
-made obsolete by one), and <code>Self</code> rules. Main rules per district:</p>
-<table>
-  <tr><th>District</th><th>Adjacency</th></tr>
-  <tr><td>Campus</td><td>+1 science per mountain, +1 per 2 rainforest, +2 per reef / geothermal fissure, +1 per 2 districts</td></tr>
-  <tr><td>Industrial Zone</td><td>+1 production per quarry or strategic resource, +1 per 2 mines / lumber mills, +2 per aqueduct / dam / canal, +1 per 2 districts</td></tr>
-  <tr><td>Commercial Hub</td><td>+2 gold on a river, +2 next to a Harbor, +1 per 2 districts</td></tr>
-  <tr><td>Holy Site</td><td>+1 faith per mountain, +2 per natural wonder, +1 per 2 forests, +1 per 2 districts</td></tr>
-  <tr><td>Theater</td><td>+2 culture per wonder, +2 next to an Entertainment Complex / Water Park, +1 per 2 districts</td></tr>
-  <tr><td>Harbor</td><td>+2 gold next to the city centre, +1 per sea resource, +1 per 2 districts</td></tr>
-  <tr><td>Encampment</td><td>none</td></tr>
-</table>
-<p class="muted">The Campus rules in detail:</p>
-<table>
-  <tr><th>Rule</th><th>Matching neighbour</th><th>\(\delta\)</th><th>per \(m\)</th></tr>
-  <tr><td><code>Mountains_Science1..5</code></td><td>grass / plains / desert / tundra / snow mountain</td><td>+1 science</td><td>1</td></tr>
-  <tr><td><code>Jungle_Science</code></td><td>rainforest</td><td>+1 science</td><td>2</td></tr>
-  <tr><td><code>District_Science</code></td><td>any district or city centre (existing, or the planned centre \(c\))</td><td>+1 science</td><td>2</td></tr>
-  <tr><td><code>Reef_Science</code>, <code>GBR_Science</code></td><td>reef, Great Barrier Reef</td><td>+2 science</td><td>1</td></tr>
-  <tr><td><code>Geothermal_Science</code></td><td>geothermal fissure</td><td>+2 science</td><td>1</td></tr>
-  <tr><td><code>Pamukkale_Science</code></td><td>Pamukkale</td><td>+2 science</td><td>1</td></tr>
-  <tr><td><code>Government_Science</code></td><td>Government Plaza (existing only)</td><td>+1 science</td><td>1</td></tr>
-</table>
-
-<h2>Parameters</h2>
-<p class="muted">Defaults in <code>config/default.toml</code>, then overridden by the test case's
-<code>data/&lt;case&gt;/config.toml</code>, then by <code>--config FILE</code> (e.g. <code>config/science.toml</code> sets science
-to 3). Each file sets only what it changes. The log of each run lists the values used.</p>
-<table>
-  <tr><th>Symbol</th><th>Setting</th><th>Default</th><th>Meaning</th></tr>
-  <tr><td>\(w_k\)</td><td><code>objective.weights</code></td><td>food 1, production 2, gold 0.5, science 2, culture 0.5, faith 0.5</td><td>Value of one unit of each yield (placeholder; science and production first for now)</td></tr>
-  <tr><td>2</td><td><code>objective.site_radius</code></td><td>2</td><td>Radius counted in the site value \(s_c\)</td></tr>
-  <tr><td>\(\lambda\)</td><td><code>objective.loss_factor</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
-  <tr><td>\(\beta_C\)</td><td><code>objective.city_bonus</code></td><td>100</td><td>Per city founded</td></tr>
-  <tr><td>\(\beta_D\)</td><td><code>objective.district_bonus</code></td><td>10</td><td>Per district placed</td></tr>
-  <tr><td></td><td><code>problem.max_city_candidates</code></td><td>400</td><td>Best sites by \(s_c\) kept as \(C\)</td></tr>
-  <tr><td></td><td><code>solver.time_limit</code>, <code>solver.mip_rel_gap</code></td><td>60 s, \(10^{-6}\)</td><td>HiGHS limits; any other <code>scipy.optimize.milp</code> option (<code>presolve</code>, <code>node_limit</code>) can go in <code>[solver]</code></td></tr>
-</table>
-
-<h2>Size and solve times</h2>
-<table>
-  <tr><th>Map</th><th>City sites \(|C|\)</th><th>Variables</th><th>Rows</th><th>Time</th></tr>
-  <tr><td>continents-revealed (43 tiles), 5 cities</td><td>38</td><td>4,076</td><td>2,868</td><td>0.5 s</td></tr>
-  <tr><td>continents-radius6 (127 tiles), 12 cities</td><td>103</td><td>13,575</td><td>10,438</td><td>1.0 s</td></tr>
-  <tr><td>continents (3,404 tiles), 56 cities</td><td>400</td><td>57,566</td><td>32,456</td><td>14 s</td></tr>
-  <tr><td>shuffle (3,404 tiles), 56 cities</td><td>400</td><td>59,541</td><td>31,583</td><td>10 s</td></tr>
-</table>
-<p class="muted">All optimal, with the default settings. The full log of each run is in
-<code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code>, next to the <code>config.toml</code> it used.</p>
-
-<h2>Not modelled yet</h2>
+<h2 id="objective">8. Objective</h2>
+<p>Maximise</p>
+<div class="card">
+$$
+f(x,z) \;=\; \underbrace{\sum_{c\in C} s_c\,x_c}_{\texttt{site\_term}}
+\;+\; \underbrace{\sum_{(d,c,t)\in Z} a_{d,c,t}\,z_{d,c,t}}_{\texttt{adjacency\_term}}
+\;-\; \underbrace{\lambda\!\!\sum_{(d,c,t)\in Z}\!\! v(t)\,z_{d,c,t}}_{\texttt{covered\_tile\_term}}
+\;+\; \underbrace{\sum b_{d,d'}\,y_{d,d',c,t}}_{\texttt{neighbour\_bonus\_term}}
+\;+\; \underbrace{\beta_C\sum_{c\in C} x_c}_{\texttt{city\_bonus\_term}}
+\;+\; \underbrace{\beta_D\!\!\sum_{(d,c,t)\in Z}\!\! z_{d,c,t}}_{\texttt{district\_bonus\_term}}
+$$
+</div>
 <ul>
-  <li><b>Adjacency between planned districts</b>, other than a district and its own city centre. Exact for one city with
-  one district; with more it needs integer variables \(k_{d,t}\) with \(m\,k_{d,t} \le\) (existing + planned districts next
-  to \(t\)) and \(k_{d,t}\le \lfloor 6/m\rfloor \sum_c z_{d,c,t}\). A first try made the relaxation weak and HiGHS slow,
-  so it waits. <code>evaluate</code> already counts these bonuses when scoring a plan.</li>
-  <li>The site value is a proxy: no housing (fresh water, coast), no amenities, no growth over time, no tile improvements.</li>
-  <li>Other districts (Entertainment Complex left out on purpose; Aqueduct, Dam, Canal, Government Plaza, Diplomatic
-  Quarter, Spaceport, Aerodrome, Neighborhood, Preserve, Water Park), unique districts, wonders, improvements.</li>
-  <li>Population: the game allows one district per 3 citizens (plus one); the plan gives every city all of them.</li>
-  <li>Ownership: a district must go on a tile the city owns, which comes with border growth or buying tiles.</li>
-  <li>On the full maps only the 400 best city sites are candidates, which caps the number of cities (56 there).</li>
-  <li>Site values of cities 4 apart can count the same tile twice.</li>
-  <li>The city may be placed far from the player's start; no travel time or settler cost.</li>
+  <li>\(\lambda\) (<code>objective.loss_factor</code>, 0.5): the share of a covered tile's yields counted as lost. A district
+  replaces the tile's own yields; the city still gets some value back through its buildings, hence \(\lambda&lt;1\).</li>
+  <li>\(\beta_C\), \(\beta_D\) (<code>objective.city_bonus</code> 100, <code>objective.district_bonus</code> 10): placement
+  bonuses. Without them a district whose \(a_{d,c,t}-\lambda v(t)\) is negative would not be built (the constraints only
+  say "at most"); with them, building is preferred. See <a href="#properties">§11</a>.</li>
 </ul>
 
-<div class="note">The greedy stub (<code>--planner greedy</code>) is scored with the same objective by
-<code>model.evaluate</code>, so its <code>score</code> in <code>summary.json</code> compares directly with the MIP's.</div>
+<h2 id="constraints">9. Constraints</h2>
+
+<h3><span class="tag">(1)</span>Number of new cities · <code>max_cities</code></h3>
+$$ \sum_{c\in C} x_c \;\le\; n . $$
+
+<h3><span class="tag">(2)</span>City spacing · <code>city_spacing</code> (only when \(n\ge2\))</h3>
+<p>Two new cities must be more than \(\rho\) apart. Pairwise, this is</p>
+$$ x_a + x_b \;\le\; 1 \qquad \forall\, a,b\in C,\ a\ne b,\ \delta(a,b)\le\rho. \tag{2'} $$
+<p>The model writes the same condition with clique inequalities, whose linear relaxation is much tighter. Let
+\(\mathcal{T}\) be the triangles of \(T\): sets \(\tau=\{t_1,t_2,t_3\}\) of three mutually adjacent revealed tiles. For
+\(\tau\in\mathcal{T}\),</p>
+$$ Q_\tau \;=\; C\cap\Big(\tau\ \cup\ N_1(t_1)\cup N_1(t_2)\cup N_1(t_3)\Big), \qquad |Q_\tau|\le 12, $$
+<p>and \(\mathcal{Q}=\{Q_\tau : |Q_\tau|\ge2\}\). The constraints are</p>
+$$ \sum_{c\in Q} x_c \;\le\; 1 \quad \forall\, Q\in\mathcal{Q}, \qquad\qquad x_a + x_b \;\le\; 1 \quad \forall\, \{a,b\}\in U, $$
+<p>where \(U\) is the set of conflicting pairs of (2') not contained in any \(Q\in\mathcal{Q}\).</p>
+<div class="card">
+<p><b>Claim 1.</b> Every \(Q_\tau\) is a clique of the conflict graph: \(\delta(a,b)\le 3=\rho\) for all \(a,b\in Q_\tau\).<br>
+<i>Proof.</i> \(a\) is within 1 of some \(t_i\), \(b\) within 1 of some \(t_j\), and \(\delta(t_i,t_j)\le1\); by the triangle
+inequality \(\delta(a,b)\le 1+1+1=3\). (The code also checks it.) \(\square\)</p>
+<p><b>Claim 2.</b> If \(\delta(a,b)\le 3\) and some shortest path from \(a\) to \(b\), together with the third vertex of a
+triangle on it, is revealed, then \(\{a,b\}\subseteq Q_\tau\) for some \(\tau\).<br>
+<i>Proof.</i> Let \(a=u_0,u_1,\dots,u_\ell=b\) be the path, \(\ell\le3\). If \(\ell=3\), take a triangle containing the edge
+\(u_1u_2\): \(a\in N_1(u_1)\), \(b\in N_1(u_2)\). If \(\ell=2\), take a triangle containing \(u_1\). If \(\ell=1\), take a
+triangle containing the edge \(ab\). On the hex grid every edge lies in two triangles. \(\square\)</p>
+<p><b>Consequence.</b> The clique rows together with the pairwise rows for \(U\) have exactly the same integer solutions
+as (2'). \(U\) is empty inside the revealed area; it only matters at its edge, around unrevealed tiles.</p>
+<p><b>Why it matters.</b> Under (2') the point \(x_c=\tfrac12\) for all \(c\) is feasible for the relaxation, so its bound
+counts about half of all candidates as cities; one clique row over 12 candidates cuts their total to 1. With the
+pairwise form HiGHS spent minutes proving the packing on the full maps; with cliques they solved in 10–15 s (20–30 s since the neighbour bonuses of §7 were added).</p>
+</div>
+<p>Spacing from existing cities (any player) is enforced through \(C\subseteq C^0\).</p>
+
+<h3><span class="tag">(3)</span>One district of each type per city, only if the city exists · <code>district_needs_city</code></h3>
+$$ \sum_{t\in R_{d,c}} z_{d,c,t} \;\le\; x_c \quad \forall\, c\in C,\ d\in D, \qquad\qquad
+\sum_{t\in R_{d,e}} z_{d,e,t} \;\le\; 1 \quad \forall\, e\in E,\ d\in D\setminus B_e . $$
+
+<h3><span class="tag">(4)</span>At most one thing per tile · <code>one_thing_per_tile</code></h3>
+$$ [t\in C]\,x_t \;+\; \sum_{(d,c):\,(d,c,t)\in Z} z_{d,c,t} \;\le\; 1 \qquad \forall\, t\in T $$
+<p class="muted">Written only for tiles with at least two terms. It stops two districts (of one city or of different
+cities) from sharing a tile, and a district from going on a tile chosen as a new city centre. Existing city centres
+and districts are already outside every \(V_d\).</p>
+
+<h3><span class="tag">(5)</span>No Encampment next to another planned city · <code>not_next_to_planned_city</code></h3>
+$$ z_{d,c,t} + x_{c'} \;\le\; 1 \qquad \forall\, (d,c,t)\in Z,\ d\in D^{\text{far}},\ c'\in C\cap N_1(t),\ c'\ne c . $$
+<p class="muted">Its own city is already excluded through \(R_{d,c}\), and existing cities through \(V_d\).</p>
+
+<h3><span class="tag">(6)</span>Neighbour bonus only when both districts are there · <code>neighbour_bonus_link</code></h3>
+$$ y_{d,d',c,t} \;\le\; z_{d,c,t}, \qquad y_{d,d',c,t} \;\le\; \sum_{u\in N_1(t)\cap R_{d',c}} z_{d',c,u}, \qquad
+\sum_{t} y_{d,d',c,t} \;\le\; \sum_{u\in R_{d',c}} z_{d',c,u} . $$
+<p class="muted">The third row is implied for integer \(z\) (one \(d'\) per city can neighbour one \(d\)) but tightens the
+relaxation: it halved the full maps' solve time (47 → 22 s on continents) without changing the optimal objective.</p>
+
+<h2 id="full">10. The full programme</h2>
+<div class="card">
+$$
+\begin{aligned}
+\max_{x,\,z,\,y}\quad & \sum_{c\in C}(s_c+\beta_C)\,x_c \;+\; \sum_{(d,c,t)\in Z}\big(a_{d,c,t}-\lambda\,v(t)+\beta_D\big)\,z_{d,c,t}
+\;+\; \sum b_{d,d'}\,y_{d,d',c,t}\\[4pt]
+\text{s.t.}\quad & \textstyle\sum_{c\in C} x_c \le n && (1)\\
+& \textstyle\sum_{c\in Q} x_c \le 1 \ \ \forall Q\in\mathcal{Q}, \qquad x_a+x_b\le 1 \ \ \forall\{a,b\}\in U && (2)\\
+& \textstyle\sum_{t\in R_{d,c}} z_{d,c,t} \le x_c \ \ \forall c\in C,\, d\in D && (3a)\\
+& \textstyle\sum_{t\in R_{d,e}} z_{d,e,t} \le 1 \ \ \forall e\in E,\, d\in D\setminus B_e && (3b)\\
+& \textstyle [t\in C]\,x_t + \sum_{(d,c):(d,c,t)\in Z} z_{d,c,t} \le 1 \ \ \forall t\in T && (4)\\
+& z_{d,c,t} + x_{c'} \le 1 \ \ \forall (d,c,t)\in Z,\ d\in D^{\text{far}},\ c'\in C\cap N_1(t)\setminus\{c\} && (5)\\
+& y_{d,d',c,t} \le z_{d,c,t},\ \ y_{d,d',c,t} \le \textstyle\sum_{u\in N_1(t)\cap R_{d',c}} z_{d',c,u},\ \ \sum_t y_{d,d',c,t} \le \sum_{u} z_{d',c,u} && (6)\\
+& x\in\{0,1\}^{C},\quad z\in\{0,1\}^{Z},\quad y\in[0,1]
+\end{aligned}
+$$
+</div>
+
+<h2 id="properties">11. Properties</h2>
+<ul>
+  <li><b>Always feasible.</b> \(x=0, z=0\) satisfies every constraint, so the solver always returns a plan (empty when no
+  tile qualifies).</li>
+  <li><b>Districts are built whenever a tile is free.</b> Adding one district to a feasible solution, on a tile
+  \(t\in R_{d,c}\) that holds nothing planned and that (5) allows, for a founded city that lacks \(d\), changes \(f\) by
+  \(a_{d,c,t}-\lambda v(t)+\beta_D \ge \beta_D-\lambda v(t)\), since \(a\ge0\). This is positive whenever
+  \(v(t)&lt;\beta_D/\lambda=20\), true of every tile in practice. So at an optimum a city lacks a district only if every
+  tile of \(R_{d,c}\) is taken.</li>
+  <li><b>Cities are a soft priority.</b> \(\beta_C=100\) is not a proven bound: founding one more city can displace other
+  cities and districts, and the model accepts it only if the loss elsewhere is below \(\beta_C+s_c\). On the test maps it
+  packs as many cities as the spacing allows.</li>
+  <li><b>Determinism.</b> For a given map and settings the programme is fixed and HiGHS's result is reproducible; among
+  equally good plans its choice is arbitrary but repeatable.</li>
+</ul>
+
+<h2 id="score">12. Score and evaluation</h2>
+<p>The <b>score</b> reported for a plan leaves the bonuses out and is recomputed in plain Python by <code>evaluate</code>,
+for any plan (the MIP's or the greedy stub's):</p>
+$$ S \;=\; \sum_{c\ \text{new}} s_c \;+\; \sum_{(d,c,t)\ \text{planned}} v\big(A_{d,\cdot}(t;\Pi^{\text{all}})\big) \;-\; \lambda\!\!\sum_{(d,c,t)\ \text{planned}}\!\! v(t), $$
+<p>where \(\Pi^{\text{all}}\) holds <i>every</i> planned city centre and district. Every predicate is monotone in \(\Pi\),
+so \(A(t;\Pi^{\text{all}})\ge A(t;\{c\mapsto\text{city centre}\})\) and</p>
+$$ S \;\ge\; f(x^\star,z^\star,y^\star) - \beta_C\,|x^\star| - \beta_D\,|z^\star| , $$
+<p>(with the neighbour bonuses \(b\,y\) included in \(f\)), with equality when the only planned-next-to-planned bonuses
+are those of §7. The tests check the equality on
+maps where that holds. The "+n" badges on tacks are the per-yield bonuses \(A_{d,k}(t;\Pi^{\text{all}})\).</p>
+
+<h2 id="parameters">13. Parameters</h2>
+<p class="muted">Defaults in <code>config/default.toml</code>, overridden by the test case's <code>data/&lt;case&gt;/config.toml</code>,
+then by <code>--config FILE</code>; each file sets only what it changes. Every run's log and <code>config.toml</code> record
+the values used.</p>
+<table>
+  <tr><th>Symbol</th><th>Setting</th><th>Default</th><th>Meaning</th></tr>
+  <tr><td>\(n\)</td><td><code>problem.n_cities</code></td><td><code>"max"</code></td><td>New cities to found; <code>"max"</code> means \(|C|\)</td></tr>
+  <tr><td>\(D\)</td><td><code>problem.districts</code></td><td>the eight above</td><td>Districts planned per city</td></tr>
+  <tr><td>\(M\)</td><td><code>problem.max_city_candidates</code></td><td>400</td><td>Best sites by \(s_c\) kept as \(C\)</td></tr>
+  <tr><td>\(w_k\)</td><td><code>objective.weights</code></td><td>food 1, production 2, gold 0.5, science 2, culture 0.5, faith 0.5</td><td>Value of one unit of each yield (placeholders; science and production first for now)</td></tr>
+  <tr><td>\(\sigma\)</td><td><code>objective.site_radius</code></td><td>2</td><td>Radius of the site value</td></tr>
+  <tr><td>\(\lambda\)</td><td><code>objective.loss_factor</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
+  <tr><td>\(\beta_C\)</td><td><code>objective.city_bonus</code></td><td>100</td><td>Per new city</td></tr>
+  <tr><td>\(\beta_D\)</td><td><code>objective.district_bonus</code></td><td>10</td><td>Per district</td></tr>
+  <tr><td></td><td><code>solver.time_limit</code>, <code>solver.mip_rel_gap</code></td><td>60 s, \(10^{-6}\)</td><td>HiGHS limits; any other <code>scipy.optimize.milp</code> option may go in <code>[solver]</code></td></tr>
+  <tr><td>\(\rho\), \(\rho_D\)</td><td>game database</td><td>3, 3</td><td><code>CITY_MIN_RANGE</code>, <code>CITY_MAX_BUY_PLOT_RANGE</code></td></tr>
+</table>
+
+<h2 id="solving">14. Solving, size and times</h2>
+<p><code>solver.py</code> assembles the sparse matrix and calls <code>scipy.optimize.milp</code>, which runs HiGHS. HiGHS
+minimises, so the objective passed is \(-f\); its log (presolve, branch and bound, final report) is captured into each
+run's <code>optimisation.log</code>. Status <code>optimal</code> means proven optimal within the relative gap;
+<code>time limit</code> returns the best plan found so far.</p>
+<p>Size: \(|x| = |C|\) and \(|z| = |Z| \le |D|\,(|C|+|E|)\cdot 36\). Rows: one for (1); \(|\mathcal{Q}|+|U|\) for (2); at most
+\(|D|(|C|+|E|)\) for (3); at most \(|T|\) for (4); one per pair of Encampment variable and neighbouring site for (5).</p>
+<table>
+  <tr><th>Test case (tiles)</th><th>New cities</th><th>\(|C|\)</th><th>Variables</th><th>Rows</th><th>Time</th></tr>
+  <tr><td>continents-revealed (43)</td><td>5</td><td>38</td><td>4,449</td><td>3,496</td><td>0.6 s</td></tr>
+  <tr><td>continents-radius6 (127)</td><td>12</td><td>103</td><td>14,912</td><td>12,776</td><td>2.1 s</td></tr>
+  <tr><td>continents (3,404)</td><td>56</td><td>400</td><td>62,564</td><td>41,397</td><td>22 s</td></tr>
+  <tr><td>shuffle-revealed (43)</td><td>5</td><td>38</td><td>4,419</td><td>3,470</td><td>0.5 s</td></tr>
+  <tr><td>shuffle-radius6 (127)</td><td>12</td><td>109</td><td>15,624</td><td>12,746</td><td>3.1 s</td></tr>
+  <tr><td>shuffle (3,404)</td><td>56</td><td>400</td><td>65,238</td><td>41,894</td><td>32 s</td></tr>
+</table>
+<p class="muted">Default settings; all proven optimal (gap 0); about 65 s for all six. In every plan each Industrial
+Zone sits next to its city's Aqueduct. Logs: <code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code>.
+A live game's revealed area is the size of the first rows: under a second.</p>
+
+<h2 id="limits">15. Not modelled</h2>
+<ul>
+  <li><b>Adjacency between planned districts</b>, beyond a district and its own city centre and the one-tile neighbour
+  bonuses of §7 within a city (Industrial Zone–Aqueduct, Commercial Hub–Harbor): the "+1 per 2 districts" rules,
+  and districts of different planned cities. Making \(a\) depend on other \(z\) in general needs coupling variables, e.g. integers \(\kappa_{\alpha,t}\) with
+  \(m_\alpha\kappa_{\alpha,t}\le\) (matching existing neighbours) \(+\sum_{u\in N_1(t)}\sum z_{\cdot,\cdot,u}\) and
+  \(\kappa_{\alpha,t}\le\lfloor 6/m_\alpha\rfloor\sum_c z_{d,c,t}\). A first try weakened the relaxation and slowed HiGHS,
+  so it waits. \(S\) (§12) already counts these bonuses.</li>
+  <li><b>Tile ownership and timing.</b> In the game a district goes on a tile its city owns; borders grow over time or
+  through bought tiles, and a tile belongs to one city. The model allows any free tile within 3 and lets a district sit
+  in another planned city's range.</li>
+  <li><b>Population.</b> A city may have one district per 3 citizens (plus one); the plan gives every city all of them.</li>
+  <li><b>Site value is a proxy.</b> No housing (fresh water, coast), amenities, growth over time or future improvements;
+  sites of cities 4 apart can count the same tile twice.</li>
+  <li><b>Aqueduct housing</b>: the Aqueduct's own value (housing) is not counted; it is placed for its bonus and the
+  district bonus. It is also planned for cities already on fresh water.</li>
+  <li><b>Other districts</b>: Entertainment Complex (left out on purpose), Dam, Canal, Government Plaza,
+  Diplomatic Quarter, Spaceport, Aerodrome, Neighborhood, Preserve, Water Park; civilisation-unique districts; wonders;
+  improvements.</li>
+  <li><b>Technology- or civic-gated adjacency</b>, and civilisation or leader bonuses.</li>
+  <li><b>Foreign districts</b> count in adjacency like the player's; the game's own rule is not checked yet.</li>
+  <li><b>Fog</b>: only revealed tiles exist, so hidden cities or borders can be planned over.</li>
+  <li><b>Distance and cost</b>: new cities can be anywhere in the revealed area; no travel time or settler cost.</li>
+  <li><b>Candidate cap</b>: on the full maps only the 400 best sites are candidates, which caps the number of cities.</li>
+</ul>
+
+<div class="note">The greedy stub (<code>--planner greedy</code>: one random city and its Campus) is scored with the same
+\(S\), so its <code>score</code> in <code>summary.json</code> compares directly with the MIP's.</div>
 
 </main></body></html>

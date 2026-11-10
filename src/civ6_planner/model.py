@@ -107,8 +107,13 @@ class Instance:
     site: dict[XY, float]                # c -> site value s_c
     own: list[XY]                        # E: the player's existing cities (always there)
     spots: dict[tuple[str, XY], list[XY]]  # (district, city) -> R_{d,c}: tiles it may go on
+    # Planned-next-to-planned bonuses: (d, d2, yield, change), e.g. Industrial Zone +2
+    # production per neighbouring Aqueduct.
+    bonuses: list[tuple[str, str, str, int]] = field(default_factory=list)
     x: dict[XY, Var] = field(default_factory=dict)                 # city c -> x[c]
     z: dict[tuple[str, XY, XY], Var] = field(default_factory=dict)  # (d, c, t) -> z[d,c,t]
+    # (d, d2, c, t) -> y: district d of city c on t gets its bonus from c's district d2
+    y: dict[tuple[str, str, XY, XY], Var] = field(default_factory=dict)
 
 
 Step = Callable[[Model, "Instance"], None]   # a variable, constraint or objective function
@@ -131,11 +136,13 @@ def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, distr
                 continue   # that city already has it
             spots[d, c] = [(n["x"], n["y"]) for n in gmap.within(gmap.tiles[c], rules.district_range)
                            if rules.can_place_district(gmap, n, d) and (n["x"], n["y"]) not in reserved
-                           and not (rules.no_adjacent_city(d) and gmap.distance(c, n) == 1)]
+                           and not (rules.no_adjacent_city(d) and gmap.distance(c, n) == 1)
+                           and not (rules.is_aqueduct(d) and not (gmap.distance(c, n) == 1
+                                                                  and rules.fresh_water_source(gmap, n)))]
     if n_cities == "max":
         n_cities = len(sites)
     return Instance(gmap, rules, cfg, int(n_cities), tuple(districts), sites, {c: site[c] for c in sites},
-                    own, spots)
+                    own, spots, rules.neighbour_bonuses(tuple(districts)))
 
 
 def existing_cities(gmap: GameMap) -> tuple[list[XY], dict[XY, set[str]]]:
@@ -163,6 +170,25 @@ def district_vars(m: Model, inst: Instance) -> None:
     for (d, c), tiles in inst.spots.items():
         for t in tiles:
             inst.z[d, c, t] = m.var(("dist", d, c, t))
+
+
+def neighbour_bonus_vars(m: Model, inst: Instance) -> None:
+    """y[d,d2,c,t] in [0,1]: city c's district d on t gets the bonus for touching c's
+    district d2 (only where d2 can go next to t). Continuous: at an optimum it equals
+    min(z[d,c,t], sum of z[d2,c,u] next to t), which is 0 or 1."""
+    for d, d2, _, _ in inst.bonuses:
+        for (dd, c), tiles in inst.spots.items():
+            if dd != d or (d2, c) not in inst.spots:
+                continue
+            for t in tiles:
+                if _partner_vars(inst, d2, c, t):
+                    inst.y[d, d2, c, t] = m.var(("bonus", d, d2, c, t), integer=False)
+
+
+def _partner_vars(inst: Instance, d2: str, c: XY, t: XY) -> list[Var]:
+    """z[d2,c,u] for the tiles u next to t where city c's district d2 may go."""
+    return [inst.z[d2, c, u] for u in inst.spots.get((d2, c), [])
+            if inst.gmap.distance(t, u) == 1]
 
 
 # --- Constraints -------------------------------------------------------------
@@ -233,6 +259,21 @@ def not_next_to_planned_city(m: Model, inst: Instance) -> None:
                 m.row({v: 1, inst.x[other]: 1}, hi=1)
 
 
+def neighbour_bonus_link(m: Model, inst: Instance) -> None:
+    """(6) The bonus only counts when both districts are there:
+    y[d,d2,c,t] <= z[d,c,t] and y[d,d2,c,t] <= sum_{u next to t} z[d2,c,u]."""
+    for (d, d2, c, t), v in inst.y.items():
+        m.row({v: 1, inst.z[d, c, t]: -1}, hi=0)
+        m.row([(v, 1)] + [(w, -1) for w in _partner_vars(inst, d2, c, t)], hi=0)
+    # Per city, the bonus counts at most once per partner district placed (at most one):
+    # sum_t y[d,d2,c,t] <= sum_u z[d2,c,u]. Implied for integer z; tightens the relaxation.
+    per_city: dict[tuple[str, str, XY], list[Var]] = {}
+    for (d, d2, c, t), v in inst.y.items():
+        per_city.setdefault((d, d2, c), []).append(v)
+    for (d, d2, c), ys in per_city.items():
+        m.row([(v, 1) for v in ys] + [(inst.z[d2, c, u], -1) for u in inst.spots[d2, c]], hi=0)
+
+
 def one_thing_per_tile(m: Model, inst: Instance) -> None:
     """(4) A tile holds at most one city or district: x[t] + sum z[.,.,t] <= 1."""
     occ: dict[XY, list[Var]] = {}
@@ -268,6 +309,16 @@ def covered_tile_term(m: Model, inst: Instance) -> None:
         m.add_obj(v, -inst.cfg.loss_factor * inst.cfg.weighted(inst.gmap.tiles[t]))
 
 
+def neighbour_bonus_term(m: Model, inst: Instance) -> None:
+    """+ w_k change y[d,d2,c,t]: e.g. +2 production (weighted) for an Industrial Zone
+    next to its city's Aqueduct. At most one d2 per city, so the count is 0 or 1."""
+    value = {(d, d2): 0.0 for d, d2, _, _ in inst.bonuses}
+    for d, d2, k, change in inst.bonuses:
+        value[d, d2] += inst.cfg.weights[k] * change
+    for (d, d2, c, t), v in inst.y.items():
+        m.add_obj(v, value[d, d2])
+
+
 def city_bonus_term(m: Model, inst: Instance) -> None:
     """+ city_bonus x[c]: found the cities asked for whenever possible."""
     for v in inst.x.values():
@@ -283,6 +334,7 @@ def district_bonus_term(m: Model, inst: Instance) -> None:
 VARIABLES: list[Step] = [
     city_vars,
     district_vars,
+    neighbour_bonus_vars,
 ]
 CONSTRAINTS: list[Step] = [
     max_cities,
@@ -290,11 +342,13 @@ CONSTRAINTS: list[Step] = [
     district_needs_city,
     one_thing_per_tile,
     not_next_to_planned_city,
+    neighbour_bonus_link,
 ]
 OBJECTIVE: list[Step] = [
     site_term,
     adjacency_term,
     covered_tile_term,
+    neighbour_bonus_term,
     city_bonus_term,
     district_bonus_term,
 ]

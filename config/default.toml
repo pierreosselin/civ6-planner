@@ -11,6 +11,7 @@ districts = [                      # districts per city (game type names)
     "DISTRICT_THEATER",
     "DISTRICT_ENCAMPMENT",
     "DISTRICT_HARBOR",             # coast tiles only; cities without one simply get none
+    "DISTRICT_AQUEDUCT",           # next to the city centre and fresh water (river, lake, mountain, oasis)
 ]
 max_city_candidates = 400          # keep only the best city sites by site value
 

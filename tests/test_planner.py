@@ -252,8 +252,35 @@ class OptimiserTest(unittest.TestCase):
         self.assertTrue(plan.cities)
         self.assertFalse(taken & (set(plan.cities) | {xy for _, xy, _ in plan.districts}))
 
+    def test_industrial_zone_goes_next_to_its_aqueduct(self):
+        # Food around (5, 6) puts the city there; rivers on (6, 6) and (4, 6) make those the
+        # only Aqueduct tiles. The +2 production bonus should pull the Industrial Zone
+        # next to the Aqueduct, and the MIP's objective should count it exactly.
+        special = {(x, y): yields(food=2) for x in range(3, 8) for y in range(4, 9)}
+        special[(6, 6)] = {**special[(6, 6)], "river": 1}
+        special[(4, 6)] = {**special[(4, 6)], "river": 1}
+        gmap = full_map(special)
+        rules = Rules(adjacencies={"DISTRICT_INDUSTRIAL_ZONE": [
+            {"yield": "YIELD_PRODUCTION", "change": 2, "tiles": 1, "district": "DISTRICT_AQUEDUCT"}]})
+        plan = model.optimise(gmap, rules, n_cities=1,
+                              districts=("DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_AQUEDUCT"))
+        [city] = plan.cities
+        at = {d: xy for d, xy, _ in plan.districts}
+        self.assertEqual(gmap.distance(at["DISTRICT_AQUEDUCT"], city), 1)
+        self.assertIn(at["DISTRICT_AQUEDUCT"], {(6, 6), (4, 6)})
+        self.assertEqual(gmap.distance(at["DISTRICT_INDUSTRIAL_ZONE"], at["DISTRICT_AQUEDUCT"]), 1)
+        self.check_score(gmap, rules, plan, 2)
+
 
 class DistrictRulesTest(unittest.TestCase):
+    def test_aqueduct_next_to_city_and_fresh_water(self):
+        gmap = full_map({(6, 5): {"river": 1}, (3, 3): MOUNTAIN})
+        rules = Rules()
+        self.assertTrue(rules.is_aqueduct("DISTRICT_AQUEDUCT"))
+        self.assertTrue(rules.fresh_water_source(gmap, gmap.tiles[(6, 5)]))       # river
+        self.assertTrue(rules.fresh_water_source(gmap, gmap.tiles[(4, 3)]))       # next to a mountain
+        self.assertFalse(rules.fresh_water_source(gmap, gmap.tiles[(10, 8)]))
+
     def test_harbor_goes_on_coast_next_to_land(self):
         coast = {"water": 1, "terrain": "TERRAIN_COAST"}
         special = {(x, y): dict(coast) for x in range(W) for y in range(6, H)}   # north half is sea

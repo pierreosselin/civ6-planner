@@ -25,13 +25,15 @@ from .gamemap import XY, GameMap, Tile
 AdjacencyRule = dict[str, Any]
 
 # Districts table flags used for placement: Coast (goes on a coast water tile),
-# AdjacentToLand, NoAdjacentCity (not next to any city centre, e.g. Encampment).
-PLACEMENT_FLAGS = ("Coast", "AdjacentToLand", "NoAdjacentCity")
+# AdjacentToLand, NoAdjacentCity (not next to any city centre, e.g. Encampment),
+# Aqueduct (next to its city centre and a fresh-water source: see fresh_water_source).
+PLACEMENT_FLAGS = ("Coast", "AdjacentToLand", "NoAdjacentCity", "Aqueduct")
 
 # Placement flags of the special planned districts, for when the database can't be read.
 DEFAULT_PLACEMENT: dict[str, dict[str, int]] = {
-    "DISTRICT_HARBOR": {"Coast": 1, "AdjacentToLand": 1, "NoAdjacentCity": 0},
-    "DISTRICT_ENCAMPMENT": {"Coast": 0, "AdjacentToLand": 0, "NoAdjacentCity": 1},
+    "DISTRICT_HARBOR": {"Coast": 1, "AdjacentToLand": 1, "NoAdjacentCity": 0, "Aqueduct": 0},
+    "DISTRICT_ENCAMPMENT": {"Coast": 0, "AdjacentToLand": 0, "NoAdjacentCity": 1, "Aqueduct": 0},
+    "DISTRICT_AQUEDUCT": {"Coast": 0, "AdjacentToLand": 0, "NoAdjacentCity": 0, "Aqueduct": 1},
 }
 
 # Campus adjacency as in the Gathering Storm database, for when it can't be read.
@@ -208,3 +210,31 @@ class Rules:
     def no_adjacent_city(self, district: str) -> bool:
         """The district may not touch any city centre (Encampment)."""
         return bool(self.placement.get(district, {}).get("NoAdjacentCity"))
+
+    def is_aqueduct(self, district: str) -> bool:
+        """Aqueduct-like districts (Aqueduct, Bath): next to their own city centre and a
+        fresh-water source. The flag is in the Districts table; the rule itself is engine
+        behaviour, not data."""
+        return bool(self.placement.get(district, {}).get("Aqueduct"))
+
+    @staticmethod
+    def fresh_water_source(gmap: GameMap, tile: Tile) -> bool:
+        """Engine rule for aqueducts: the tile touches a river, or is next to a lake, a
+        mountain or an oasis."""
+        if tile.get("river"):
+            return True
+        return any(n.get("lake") or n["mountain"] or n["feature"] == "FEATURE_OASIS"
+                   for n in gmap.neighbours(tile))
+
+    def neighbour_bonuses(self, districts: tuple[str, ...]) -> list[tuple[str, str, str, int]]:
+        """(d, d2, yield, change) for every rule giving district d `change` of `yield` per
+        neighbouring district d2, where both are planned (e.g. Industrial Zone next to an
+        Aqueduct, Commercial Hub next to a Harbor). Only one-tile rules; city centres
+        are handled separately."""
+        out = []
+        for d in districts:
+            for rule in self.adjacencies.get(d, []):
+                d2 = rule.get("district")
+                if d2 in districts and d2 != d and rule["tiles"] == 1:
+                    out.append((d, d2, rule["yield"], rule["change"]))
+        return out

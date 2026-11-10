@@ -13,7 +13,7 @@ Civ VI + Map Dump mod ──(map dump inside each save)──▶ civ6_planner pl
 
 The default planner is a MIP solved with HiGHS (`src/civ6_planner/model.py`): it places
 as many cities as fit, each with a Campus, Industrial Zone, Commercial Hub, Holy Site,
-Theater, Encampment and (on coast) Harbor, to maximise the cities' site yields plus the
+Theater, Encampment, (on coast) Harbor and Aqueduct, to maximise the cities' site yields plus the
 districts' adjacency, minus the yields of the tiles they cover. See `docs/model.html`. The first stub below is still there
 as `--planner greedy`, for comparison.
 
