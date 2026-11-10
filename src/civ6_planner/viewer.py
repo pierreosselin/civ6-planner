@@ -91,7 +91,12 @@ const TACK = { ICON_DISTRICT_CITY_CENTER:["C","#c0392b"], ICON_DISTRICT_CAMPUS:[
   ICON_DISTRICT_INDUSTRIAL_ZONE:["P","#d35400"], ICON_DISTRICT_COMMERCIAL_HUB:["G","#b8900b"],
   ICON_DISTRICT_HOLY_SITE:["F","#7f8c8d"], ICON_DISTRICT_THEATER:["T","#8e44ad"],
   ICON_DISTRICT_ENCAMPMENT:["E","#6d4c41"], ICON_DISTRICT_HARBOR:["H","#16a085"],
-  ICON_DISTRICT_AQUEDUCT:["A","#2980b9"], ICON_DISTRICT_DAM:["D","#34495e"] };
+  ICON_DISTRICT_AQUEDUCT:["A","#2980b9"], ICON_DISTRICT_DAM:["D","#34495e"],
+  // Improvements: lowercase letters on a lighter disc.
+  ICON_IMPROVEMENT_FARM:["f","#7cb342"], ICON_IMPROVEMENT_MINE:["m","#8d6e63"],
+  ICON_IMPROVEMENT_QUARRY:["q","#9e9e9e"], ICON_IMPROVEMENT_PLANTATION:["p","#c0ca33"],
+  ICON_IMPROVEMENT_CAMP:["c","#6d8b3a"], ICON_IMPROVEMENT_PASTURE:["s","#a1887f"],
+  ICON_IMPROVEMENT_FISHING_BOATS:["b","#4fa3d1"], ICON_IMPROVEMENT_LUMBER_MILL:["l","#558b2f"] };
 // Yields in the game's order and colours: [field, letter, fill, text colour].
 const YIELDS = [["YIELD_FOOD","F","#5f9e2f","#fff"], ["YIELD_PRODUCTION","P","#c8682a","#fff"], ["YIELD_GOLD","G","#e0b42a","#222"],
                 ["YIELD_SCIENCE","S","#3b7fd0","#fff"], ["YIELD_CULTURE","C","#8e4fbf","#fff"], ["YIELD_FAITH","Fa","#e9e6dc","#222"]];
@@ -223,7 +228,11 @@ const legend = [["grass", TERRAIN.GRASS], ["plains", TERRAIN.PLAINS], ["desert",
   ["P industrial zone", TACK.ICON_DISTRICT_INDUSTRIAL_ZONE[1]], ["G commercial hub", TACK.ICON_DISTRICT_COMMERCIAL_HUB[1]],
   ["F holy site", TACK.ICON_DISTRICT_HOLY_SITE[1]], ["T theater", TACK.ICON_DISTRICT_THEATER[1]],
   ["E encampment", TACK.ICON_DISTRICT_ENCAMPMENT[1]], ["H harbor", TACK.ICON_DISTRICT_HARBOR[1]],
-  ["A aqueduct", TACK.ICON_DISTRICT_AQUEDUCT[1]], ["D dam", TACK.ICON_DISTRICT_DAM[1]]];
+  ["A aqueduct", TACK.ICON_DISTRICT_AQUEDUCT[1]], ["D dam", TACK.ICON_DISTRICT_DAM[1]],
+  ["f farm", TACK.ICON_IMPROVEMENT_FARM[1]], ["m mine", TACK.ICON_IMPROVEMENT_MINE[1]],
+  ["q quarry", TACK.ICON_IMPROVEMENT_QUARRY[1]], ["p plantation", TACK.ICON_IMPROVEMENT_PLANTATION[1]],
+  ["c camp", TACK.ICON_IMPROVEMENT_CAMP[1]], ["s pasture", TACK.ICON_IMPROVEMENT_PASTURE[1]],
+  ["b fishing boats", TACK.ICON_IMPROVEMENT_FISHING_BOATS[1]], ["l lumber mill", TACK.ICON_IMPROVEMENT_LUMBER_MILL[1]]];
 document.getElementById("legend").innerHTML = legend.map(([n, c]) => `<span><span class="sw" style="background:${c}"></span>${n}</span>`).join("")
   + `<span class="muted" style="grid-column:1/-1">dot top-left: feature · ^^: hills · coloured edge: owner</span>`
   + [["forest", "FOREST"], ["rainforest", "JUNGLE"], ["marsh", "MARSH"], ["floodplains", "FLOODPLAINS"], ["reef", "REEF"],

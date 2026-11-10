@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from .gamemap import XY, GameMap
-from .model import CITY_CENTER, Plan
+from .model import CITY_CENTER, Plan, improvement_value
 from .rules import Rules
 
 
@@ -20,12 +20,24 @@ def plan_metrics(gmap: GameMap, rules: Rules, plan: Plan) -> dict[str, Any]:
     cities: list[XY] = list(plan.cities) + [c for c in own if c not in plan.cities]
     planned: dict[XY, str] = {xy: CITY_CENTER for xy in plan.cities}
     planned.update({xy: d for d, xy, _ in plan.districts})
+    improved = {xy: i for i, xy, _ in plan.improvements}
 
     per_city: dict[XY, list[str]] = {c: [] for c in cities}
     adjacency: dict[str, list[dict[str, int]]] = {}
     for d, xy, city in plan.districts:
         per_city.setdefault(city, []).append(d)
-        adjacency.setdefault(d, []).append(rules.adjacency(gmap, gmap.tiles[xy], d, planned))
+        adjacency.setdefault(d, []).append(rules.adjacency(gmap, gmap.tiles[xy], d, planned, improved))
+
+    imps: dict[XY, list[str]] = {c: [] for c in cities}
+    ivalue: dict[str, list[float]] = {}
+    for i, xy, city in plan.improvements:
+        imps.setdefault(city, []).append(i)
+        ivalue.setdefault(i, []).append(improvement_value(rules, plan.config, i, gmap.tiles[xy]))
+    icounts = [len(v) for v in imps.values()]
+    itypes = {i: {"count": len(v), "cities_with": sum(1 for x in imps.values() if i in x),
+                  "share_of_cities": round(sum(1 for x in imps.values() if i in x) / len(imps), 3) if imps else 0.0,
+                  "value_mean": round(sum(v) / len(v), 2)}
+              for i, v in sorted(ivalue.items(), key=lambda kv: -len(kv[1]))}
 
     counts = [len(ds) for ds in per_city.values()]
     histogram: dict[int, int] = {}
@@ -58,6 +70,12 @@ def plan_metrics(gmap: GameMap, rules: Rules, plan: Plan) -> dict[str, Any]:
             "histogram": dict(sorted(histogram.items())),
         },
         "by_type": types,
+        "improvements": len(plan.improvements),
+        "improvements_per_city": {
+            "mean": round(sum(icounts) / len(icounts), 2) if icounts else 0.0,
+            "min": min(icounts, default=0), "max": max(icounts, default=0),
+        },
+        "improvements_by_type": itypes,
     }
 
 
@@ -74,4 +92,11 @@ def format_metrics(m: dict[str, Any]) -> list[str]:
                         for k, (lo, hi) in t["adjacency_min_max"].items()) or "none"
         lines.append(f"{d.removeprefix('DISTRICT_').replace('_', ' ').title():<18}{t['count']:>6}"
                      f"{t['cities_with']:>11}{t['share_of_cities']:>8.0%}  {adj:<26} {t['weighted_mean']:>6}")
+    if m.get("improvements_by_type"):
+        ipc = m["improvements_per_city"]
+        lines += [f"improvements {m['improvements']}; per city mean {ipc['mean']}, min {ipc['min']}, max {ipc['max']}",
+                  f"{'improvement':<18}{'count':>6}{'in cities':>11}{'share':>8}  mean value (gain + worked tile)"]
+        for i, t in m["improvements_by_type"].items():
+            lines.append(f"{i.removeprefix('IMPROVEMENT_').replace('_', ' ').title():<18}{t['count']:>6}"
+                         f"{t['cities_with']:>11}{t['share_of_cities']:>8.0%}  {t['value_mean']}")
     return lines

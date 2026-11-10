@@ -10,13 +10,19 @@ edges, one per river), and gives the player's existing cities the ones they lack
 At most 3 specialty districts per city (`problem.max_specialty_districts`; the game's
 population limit, RequiresPopulation; Aqueduct and Dam don't count), so the weights
 decide which ones each city gets. Bonuses between a city's own planned districts (Industrial Zone next to Aqueduct/Dam,
-Commercial Hub next to Harbor) are modelled with `y` variables. Each run's log ends
+Commercial Hub next to Harbor) are modelled with `y` variables. Improvements (Farm, Mine,
+Quarry, Plantation, Camp, Pasture, Fishing Boats, Lumber Mill; placement from the DB):
+up to 5 per city, each worth its gain plus the tile's own yields (an improved tile is
+worked), only each city's 6 best options kept (`problem.improvement_candidates`; all of
+them made the full maps hit the time limit); Industrial Zone bonuses from planned
+quarries/mines/lumber mills via `q` variables. Each run's log ends
 with metrics (`metrics.py`: districts per city, share of cities with each district
 type, mean adjacency per type). Tacks are named per city
 ("City C1", "Campus C1", "Campus Rome");
 Entertainment Complex left out on purpose. Objective: site yields + district
-adjacency − covered tiles, science and production weighted 2 for now. All test
-cases solve to optimal in ~90 s in total (full maps 20–60 s; city spacing written as
+adjacency − covered tiles + improved tiles; food, production and science weighted 2 for now
+(food so cities grow enough for their districts). All test
+cases solve to optimal in ~67 s in total (full maps 11–32 s; city spacing written as
 clique constraints, which made that possible). Kept simple on purpose: other adjacency
 between *planned* districts ("+1 per 2 districts", across cities) isn't modelled
 yet, because general coupling constraints made HiGHS slow.

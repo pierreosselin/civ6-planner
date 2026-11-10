@@ -162,7 +162,7 @@ class OptimiserTest(unittest.TestCase):
             special[(n["x"], n["y"])] = dict(MOUNTAIN)
         gmap = full_map(special)
         rules = Rules()
-        plan = model.optimise(gmap, rules, n_cities=1, districts=CAMPUS)
+        plan = model.optimise(gmap, rules, n_cities=1, districts=CAMPUS, improvements=())
         self.assertEqual(plan.info["status"], "optimal")
         self.assertEqual(len(plan.cities), 1)
         [(d, xy, city)] = plan.districts
@@ -175,7 +175,7 @@ class OptimiserTest(unittest.TestCase):
         # gets +1 from "+1 per 2 districts"; everything else is flat.
         gmap = full_map({(10, 6): {"district": "DISTRICT_HOLY_SITE"}})
         rules = Rules()
-        plan = model.optimise(gmap, rules, n_cities=1, districts=CAMPUS)
+        plan = model.optimise(gmap, rules, n_cities=1, districts=CAMPUS, improvements=())
         [(d, xy, city)] = plan.districts
         planned = {city: model.CITY_CENTER}
         self.assertEqual(rules.adjacency(gmap, gmap.tiles[xy], d, planned), {"YIELD_SCIENCE": 1})
@@ -184,7 +184,7 @@ class OptimiserTest(unittest.TestCase):
     def test_cities_keep_their_distance(self):
         gmap = full_map()
         rules = Rules()
-        plan = model.optimise(gmap, rules, n_cities=3, districts=())
+        plan = model.optimise(gmap, rules, n_cities=3, districts=(), improvements=())
         self.assertEqual(len(plan.cities), 3)
         for i, a in enumerate(plan.cities):
             for b in plan.cities[i + 1:]:
@@ -193,7 +193,7 @@ class OptimiserTest(unittest.TestCase):
     def test_greedy_and_mip_tacks(self):
         gmap = full_map({(10, 6): MOUNTAIN})
         for method in planner.METHODS:
-            cfg = dataclasses.replace(config.default(), n_cities=1, districts=CAMPUS)
+            cfg = dataclasses.replace(config.default(), n_cities=1, districts=CAMPUS, improvements=())
             tacks, notes = planner.plan(gmap, Rules(), random.Random(0), method, cfg)
             self.assertEqual([t.icon for t in tacks], [planner.CITY_ICON, planner.CAMPUS_ICON], method)
             self.assertTrue(notes[0].startswith(method), notes)
@@ -202,7 +202,7 @@ class OptimiserTest(unittest.TestCase):
         # "max" packs cities more than 3 apart and gives each its district.
         gmap = varied_map()
         rules = Rules()
-        plan = model.optimise(gmap, rules, n_cities="max", districts=CAMPUS)
+        plan = model.optimise(gmap, rules, n_cities="max", districts=CAMPUS, improvements=())
         self.assertEqual(plan.info["status"], "optimal")
         self.assertGreater(len(plan.cities), 6)
         self.assertEqual(len(plan.districts), len(plan.cities))
@@ -213,7 +213,7 @@ class OptimiserTest(unittest.TestCase):
     def test_encampment_never_touches_a_planned_city(self):
         gmap = varied_map(1)
         rules = Rules()
-        plan = model.optimise(gmap, rules, n_cities="max", districts=("DISTRICT_ENCAMPMENT",))
+        plan = model.optimise(gmap, rules, n_cities="max", districts=("DISTRICT_ENCAMPMENT",), improvements=())
         self.assertEqual(len(plan.districts), len(plan.cities))
         for _, xy, _ in plan.districts:
             self.assertTrue(all(gmap.distance(xy, c) > 1 for c in plan.cities), xy)
@@ -225,7 +225,7 @@ class OptimiserTest(unittest.TestCase):
                          (6, 5): {"owner": 0, "city": 7, "district": "DISTRICT_CAMPUS"}})
         gmap.own_cities = [{"id": 7, "name": "Rome", "x": 5, "y": 5}]
         districts = ("DISTRICT_CAMPUS", "DISTRICT_HOLY_SITE")
-        plan = model.optimise(gmap, Rules(), n_cities=1, districts=districts)
+        plan = model.optimise(gmap, Rules(), n_cities=1, districts=districts, improvements=())
         rome = [d for d, _, c in plan.districts if c == (5, 5)]
         new = [d for d, _, c in plan.districts if c == plan.cities[0]]
         self.assertEqual(rome, ["DISTRICT_HOLY_SITE"])
@@ -237,17 +237,17 @@ class OptimiserTest(unittest.TestCase):
     def test_no_new_city_still_plans_existing_ones(self):
         gmap = full_map({(5, 5): {"is_city": 1, "owner": 0, "city": 1, "district": "DISTRICT_CITY_CENTER"}})
         gmap.own_cities = [{"id": 1, "name": "Rome", "x": 5, "y": 5}]
-        plan = model.optimise(gmap, Rules(), n_cities=0, districts=CAMPUS)
+        plan = model.optimise(gmap, Rules(), n_cities=0, districts=CAMPUS, improvements=())
         self.assertEqual((plan.cities, [c for _, _, c in plan.districts]), ([], [(5, 5)]))
 
     def test_players_own_tacks_are_left_alone(self):
         # The best site (food everywhere around (5, 6)) holds one of the player's tacks.
         special = {(x, y): yields(food=2) for x in range(3, 8) for y in range(4, 9)}
-        free = model.optimise(full_map(special), Rules(), n_cities=1, districts=CAMPUS)
+        free = model.optimise(full_map(special), Rules(), n_cities=1, districts=CAMPUS, improvements=())
         gmap = full_map(special)
         gmap.pins = [{"x": x, "y": y, "name": "mine", "icon": "ICON_MAP_PIN_STAR"}
                      for x, y in free.cities + [xy for _, xy, _ in free.districts]]
-        plan = model.optimise(gmap, Rules(), n_cities=1, districts=CAMPUS)
+        plan = model.optimise(gmap, Rules(), n_cities=1, districts=CAMPUS, improvements=())
         taken = {(p["x"], p["y"]) for p in gmap.pins}
         self.assertTrue(plan.cities)
         self.assertFalse(taken & (set(plan.cities) | {xy for _, xy, _ in plan.districts}))
@@ -263,7 +263,7 @@ class OptimiserTest(unittest.TestCase):
         rules = Rules(adjacencies={"DISTRICT_INDUSTRIAL_ZONE": [
             {"yield": "YIELD_PRODUCTION", "change": 2, "tiles": 1, "district": "DISTRICT_AQUEDUCT"}]})
         plan = model.optimise(gmap, rules, n_cities=1,
-                              districts=("DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_AQUEDUCT"))
+                              districts=("DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_AQUEDUCT"), improvements=())
         [city] = plan.cities
         at = {d: xy for d, xy, _ in plan.districts}
         self.assertEqual(gmap.distance(at["DISTRICT_AQUEDUCT"], city), 1)
@@ -278,7 +278,7 @@ class OptimiserTest(unittest.TestCase):
         gmap = full_map(special)
         specialty = ("DISTRICT_CAMPUS", "DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_COMMERCIAL_HUB",
                      "DISTRICT_HOLY_SITE", "DISTRICT_THEATER")
-        plan = model.optimise(gmap, Rules(), n_cities=1, districts=specialty + ("DISTRICT_AQUEDUCT",))
+        plan = model.optimise(gmap, Rules(), n_cities=1, districts=specialty + ("DISTRICT_AQUEDUCT",), improvements=())
         kinds = [d for d, _, _ in plan.districts]
         self.assertEqual(sum(d in specialty for d in kinds), 3)
         self.assertIn("DISTRICT_AQUEDUCT", kinds)
@@ -290,7 +290,7 @@ class OptimiserTest(unittest.TestCase):
                          (4, 5): {"owner": 0, "city": 1, "district": "DISTRICT_HOLY_SITE"}})
         gmap.own_cities = [{"id": 1, "name": "Rome", "x": 5, "y": 5}]
         plan = model.optimise(gmap, Rules(), n_cities=0,
-                              districts=("DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_COMMERCIAL_HUB", "DISTRICT_THEATER"))
+                              districts=("DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_COMMERCIAL_HUB", "DISTRICT_THEATER"), improvements=())
         self.assertEqual(len(plan.districts), 1)
 
     def test_metrics_count_districts_per_city_and_type(self):
@@ -307,6 +307,57 @@ class OptimiserTest(unittest.TestCase):
         self.assertEqual(m["by_type"]["DISTRICT_HOLY_SITE"]["share_of_cities"], 0.5)
         # Each Campus touches its city centre only: +1 per 2 districts gives 0.
         self.assertTrue(metrics.format_metrics(m))
+
+
+class ImprovementTest(unittest.TestCase):
+    def test_placement_rules(self):
+        gmap = full_map({(3, 3): {"terrain": "TERRAIN_PLAINS_HILLS"},
+                         (4, 3): {"resource": "RESOURCE_STONE"},
+                         (5, 3): {"feature": "FEATURE_FOREST"},
+                         (6, 3): {"resource": "RESOURCE_IRON", "terrain": "TERRAIN_PLAINS_HILLS"},
+                         (7, 3): {"improvement": "IMPROVEMENT_FARM"}})
+        r = Rules()
+        ok = lambda xy: sorted(i[12:] for i in r.improvements if r.can_place_improvement(gmap, gmap.tiles[xy], i))
+        self.assertEqual(ok((2, 3)), ["FARM"])                  # bare plains
+        self.assertEqual(ok((3, 3)), ["MINE"])                  # hills
+        self.assertEqual(ok((4, 3)), ["QUARRY"])                # a resource: only its improvement
+        self.assertEqual(ok((5, 3)), ["LUMBER_MILL"])           # a feature must be allowed
+        self.assertEqual(ok((6, 3)), ["MINE"])
+        self.assertEqual(ok((7, 3)), [])                        # already improved
+
+    def test_five_per_city_on_the_best_tiles(self):
+        # Plains everywhere (Farm: 1 food + the tile's 1 food); five 3-food tiles near the
+        # food site: the improvements should go on those (improve the good tiles).
+        special = {(x, y): yields(food=2) for x in range(3, 8) for y in range(4, 9)}
+        rich = [(4, 5), (6, 5), (4, 7), (6, 7), (5, 8)]
+        for xy in rich:
+            special[xy] = yields(food=3)
+        gmap = full_map(special)
+        plan = model.optimise(gmap, Rules(), n_cities=1, districts=(), improvements=None)
+        self.assertEqual(len(plan.improvements), 5)
+        self.assertEqual({xy for _, xy, _ in plan.improvements}, set(rich))
+        self.check_score(gmap, plan)
+
+    def test_industrial_zone_next_to_quarry(self):
+        # A stone tile near the city: the Industrial Zone (+1 production per quarry) should
+        # sit next to the planned quarry.
+        special = {(x, y): yields(food=2) for x in range(3, 8) for y in range(4, 9)}
+        special[(7, 6)] = {**special[(7, 6)], "resource": "RESOURCE_STONE"}
+        gmap = full_map(special)
+        rules = Rules(adjacencies={"DISTRICT_INDUSTRIAL_ZONE": [
+            {"yield": "YIELD_PRODUCTION", "change": 1, "tiles": 1, "improvement": "IMPROVEMENT_QUARRY"}]})
+        plan = model.optimise(gmap, rules, n_cities=1, districts=("DISTRICT_INDUSTRIAL_ZONE",),
+                              improvements=("IMPROVEMENT_QUARRY",))
+        [(_, iz, _)] = plan.districts
+        self.assertEqual([xy for _, xy, _ in plan.improvements], [(7, 6)])
+        self.assertEqual(gmap.distance(iz, (7, 6)), 1)
+        self.check_score(gmap, plan, rules)
+
+    def check_score(self, gmap, plan, rules=None):
+        score, _ = model.evaluate(gmap, rules or Rules(), plan)
+        cfg = plan.config
+        expected = score + cfg.city_bonus * len(plan.cities) + cfg.district_bonus * len(plan.districts)
+        self.assertAlmostEqual(plan.info["objective"], expected, places=6)
 
 
 class RiverTest(unittest.TestCase):
@@ -344,7 +395,7 @@ class DistrictRulesTest(unittest.TestCase):
         flood = {"feature": "FEATURE_FLOODPLAINS"}
         river = {(x, 6): {**flood, "river_w": 1, "river_nw": 1} for x in range(2, 18)}
         gmap = full_map(river)
-        plan = model.optimise(gmap, Rules(), n_cities=2, districts=("DISTRICT_DAM",))
+        plan = model.optimise(gmap, Rules(), n_cities=2, districts=("DISTRICT_DAM",), improvements=())
         dams = [xy for d, xy, _ in plan.districts if d == "DISTRICT_DAM"]
         self.assertEqual(len(plan.cities), 2)
         self.assertEqual(len(dams), 1)
@@ -487,12 +538,12 @@ class ConfigTest(unittest.TestCase):
             config.load(self.write("[objective]\nsite_radios = 3\n"))
 
     def test_weights_change_the_plan_score(self):
-        # Every tile gives 1 food; with food weighted 2 the site value doubles.
+        # Every tile gives 1 food; with food weighted 4 (default 2) the site value doubles.
         gmap = full_map({(x, y): yields(food=1) for x in range(20) for y in range(12)})
         rules = Rules()
-        cfg = config.load(self.write("[objective.weights]\nfood = 2.0\n"))
-        a = model.optimise(gmap, rules, n_cities=1, districts=())
-        b = model.optimise(gmap, rules, cfg, n_cities=1, districts=())
+        cfg = config.load(self.write("[objective.weights]\nfood = 4.0\n"))
+        a = model.optimise(gmap, rules, n_cities=1, districts=(), improvements=())
+        b = model.optimise(gmap, rules, cfg, n_cities=1, districts=(), improvements=())
         self.assertAlmostEqual(model.evaluate(gmap, rules, b)[0], 2 * model.evaluate(gmap, rules, a)[0])
 
 

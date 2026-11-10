@@ -86,12 +86,12 @@ def plan(gmap: GameMap, rules: Rules, rng: random.Random | None = None, method: 
 def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
     """Human-readable notes on a plan: its score, the solver's run, each placement."""
     notes = []
-    if not p.cities and not p.districts:
+    if not p.cities and not p.districts and not p.improvements:
         return [f"{method}: nothing to place: no city site and no district spot ({p.info.get('status')})"]
     label = city_labels(gmap, p)
     score, parts = model.evaluate(gmap, rules, p)
     notes.append(f"{method}: score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
-                 f" - covered tiles {parts['lost']:.1f}")
+                 f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}")
     if method == "mip":
         i = p.info
         notes.append(f"HiGHS {i['status']} in {i['seconds']}s: {i['variables']} variables, {i['rows']} rows, "
@@ -103,7 +103,17 @@ def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
         adj = ", ".join(f"+{v} {y[6:].lower()}" for y, v in _district_yields(gmap, rules, p, d, xy).items())
         notes.append(f"{district_name(d).lower()} of {label[city]} at {xy}: {gmap.tiles[xy]['terrain']}, "
                      f"{adj or 'no adjacency'}")
+    for imp, xy, city in p.improvements:
+        gain = ", ".join(f"+{v} {y[6:].lower()}" for y, v in rules.improvements[imp].yields.items())
+        notes.append(f"{improvement_name(imp).lower()} of {label[city]} at {xy}: {gmap.tiles[xy]['terrain']}"
+                     f"{', ' + gmap.tiles[xy]['resource'] if gmap.tiles[xy]['resource'] != 'NONE' else ''}, "
+                     f"{gain}, value {model.improvement_value(rules, p.config, imp, gmap.tiles[xy]):.1f}")
     return notes
+
+
+def improvement_name(improvement: str) -> str:
+    """IMPROVEMENT_LUMBER_MILL -> Lumber Mill."""
+    return improvement.removeprefix("IMPROVEMENT_").replace("_", " ").title()
 
 
 def city_labels(gmap: GameMap, p: Plan) -> dict[XY, str]:
@@ -122,7 +132,8 @@ def district_name(district: str) -> str:
 def _district_yields(gmap: GameMap, rules: Rules, p: Plan, district: str, xy: XY) -> dict[str, int]:
     planned = {c: model.CITY_CENTER for c in p.cities}
     planned.update({t: d for d, t, _ in p.districts})
-    return rules.adjacency(gmap, gmap.tiles[xy], district, planned)
+    improved = {t: i for i, t, _ in p.improvements}
+    return rules.adjacency(gmap, gmap.tiles[xy], district, planned, improved)
 
 
 def to_tacks(gmap: GameMap, rules: Rules, p: Plan) -> list[Tack]:
@@ -133,4 +144,7 @@ def to_tacks(gmap: GameMap, rules: Rules, p: Plan) -> list[Tack]:
     for d, (x, y), city in p.districts:
         tacks.append(Tack(x, y, "ICON_" + d, f"{district_name(d)} {label[city]}",
                           _district_yields(gmap, rules, p, d, (x, y))))
+    for i, (x, y), city in p.improvements:
+        tacks.append(Tack(x, y, "ICON_" + i, f"{improvement_name(i)} {label[city]}",
+                          dict(rules.improvements[i].yields)))
     return tacks

@@ -17,16 +17,31 @@ districts = [                      # districts per city (game type names)
 max_city_candidates = 400          # keep only the best city sites by site value
 max_specialty_districts = 3        # per city: districts with RequiresPopulation (all planned ones
                                    # but Aqueduct and Dam); the game allows 1 + (population - 1) // 3
+improvements = [                   # tile improvements to plan (game type names)
+    "IMPROVEMENT_FARM",
+    "IMPROVEMENT_MINE",
+    "IMPROVEMENT_QUARRY",
+    "IMPROVEMENT_PLANTATION",
+    "IMPROVEMENT_CAMP",
+    "IMPROVEMENT_PASTURE",
+    "IMPROVEMENT_FISHING_BOATS",
+    "IMPROVEMENT_LUMBER_MILL",
+]
+max_improvements = 5               # per city (existing improvements of a city count)
+improvement_candidates = 6         # per city, only its best (improvement, tile) options by value
+                                   # are considered: keeps the full maps fast
 
 [objective]
 site_radius = 2                    # tiles counted in a city's site value
 loss_factor = 0.5                  # share of a covered tile's yields counted as lost
 city_bonus = 100.0                 # per city: found the cities whenever possible
 district_bonus = 10.0              # per district: build them whenever possible
+worked_tile_factor = 1.0           # an improved tile is worked: its own yields count this much on
+                                   # top of the improvement's gain (0: only the gain counts)
 
 [objective.weights]                # value of one unit of each yield (placeholders)
-food = 1.0
-production = 2.0                   # science and production first, for now
+food = 2.0                         # cities must grow to get their districts
+production = 2.0                   # food, production and science first, for now
 gold = 0.5
 science = 2.0
 culture = 0.5

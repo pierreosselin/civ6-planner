@@ -54,6 +54,7 @@ CITY_CENTER = "DISTRICT_CITY_CENTER"
 class Plan:
     cities: list[XY] = field(default_factory=list)                    # city centres
     districts: list[tuple[str, XY, XY]] = field(default_factory=list)  # (district type, tile, its city)
+    improvements: list[tuple[str, XY, XY]] = field(default_factory=list)  # (improvement, tile, its city)
     info: dict[str, Any] = field(default_factory=dict)                # solver status, timings, sizes
     log: str = ""                                                     # the solver's log
     model: dict[str, list[str]] = field(default_factory=dict)         # constraints and objective terms used
@@ -66,24 +67,34 @@ def site_value(gmap: GameMap, tile: Tile, cfg: Config | None = None) -> float:
     return cfg.weighted(tile) + sum(cfg.weighted(t) for t in gmap.within(tile, cfg.site_radius))
 
 
+def improvement_value(rules: Rules, cfg: Config, improvement: str, tile: Tile) -> float:
+    """Value of improving `tile`: the improvement's gain, plus worked_tile_factor times the
+    tile's own yields (an improved tile is one the city works)."""
+    return cfg.weighted(rules.improvements[improvement].yields) + cfg.worked_tile_factor * cfg.weighted(tile)
+
+
 def evaluate(gmap: GameMap, rules: Rules, plan: Plan, cfg: Config | None = None) -> tuple[float, dict[str, Any]]:
     """(score, breakdown) of a plan under the model's objective, bonuses left out.
     Uses cfg, else the plan's own config."""
     cfg = cfg or plan.config
     planned: dict[XY, str] = {xy: CITY_CENTER for xy in plan.cities}
     planned.update({xy: d for d, xy, _ in plan.districts})
-    site = adjacency = lost = 0.0
+    improved = {xy: i for i, xy, _ in plan.improvements}
+    site = adjacency = lost = improvements = 0.0
     yields: dict[str, int] = {}
     for xy in plan.cities:
         site += site_value(gmap, gmap.tiles[xy], cfg)
     for d, xy, _ in plan.districts:
         tile = gmap.tiles[xy]
-        adj = rules.adjacency(gmap, tile, d, planned)
+        adj = rules.adjacency(gmap, tile, d, planned, improved)
         for y, v in adj.items():
             yields[y] = yields.get(y, 0) + v
         adjacency += cfg.weighted(adj)
         lost += cfg.loss_factor * cfg.weighted(tile)
-    return site + adjacency - lost, {"site": site, "adjacency": adjacency, "lost": lost, "yields": yields}
+    for i, xy, _ in plan.improvements:
+        improvements += improvement_value(rules, cfg, i, gmap.tiles[xy])
+    return site + adjacency - lost + improvements, {"site": site, "adjacency": adjacency, "lost": lost,
+                                                    "improvements": improvements, "yields": yields}
 
 
 # ---------------------------------------------------------------------------
@@ -111,17 +122,26 @@ class Instance:
     # Planned-next-to-planned bonuses: (d, d2, yield, change), e.g. Industrial Zone +2
     # production per neighbouring Aqueduct.
     bonuses: list[tuple[str, str, str, int]] = field(default_factory=list)
+    # Improvements: I, the types to plan; (i, city) -> tiles it may go on; how many an
+    # existing city may still get; (d, i, yield, change per improvement) district bonuses.
+    improvements: tuple[str, ...] = ()
+    ispots: dict[tuple[str, XY], list[XY]] = field(default_factory=dict)
+    improvements_left: dict[XY, int] = field(default_factory=dict)
+    ibonuses: list[tuple[str, str, str, float]] = field(default_factory=list)
     x: dict[XY, Var] = field(default_factory=dict)                 # city c -> x[c]
     z: dict[tuple[str, XY, XY], Var] = field(default_factory=dict)  # (d, c, t) -> z[d,c,t]
     # (d, d2, c, t) -> y: district d of city c on t gets its bonus from c's district d2
     y: dict[tuple[str, str, XY, XY], Var] = field(default_factory=dict)
+    w: dict[tuple[str, XY, XY], Var] = field(default_factory=dict)       # (i, c, t) -> improvement
+    # (d, i, c, u) -> q: city c's improvement i on u touches c's district d
+    q: dict[tuple[str, str, XY, XY], Var] = field(default_factory=dict)
 
 
 Step = Callable[[Model, "Instance"], None]   # a variable, constraint or objective function
 
 
 def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, districts: tuple[str, ...],
-            max_city_candidates: int) -> Instance:
+            max_city_candidates: int, improvements: tuple[str, ...] = ()) -> Instance:
     """Candidate sets and site values; no variables yet. n_cities "max": as many as fit."""
     reserved = {(p["x"], p["y"]) for p in gmap.pins}   # the player's own tacks: leave those tiles alone
     tiles = [t for t in gmap if rules.can_found_city(gmap, t) and (t["x"], t["y"]) not in reserved]
@@ -142,10 +162,33 @@ def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, distr
                            and not (rules.no_adjacent_city(d) and gmap.distance(c, n) == 1)
                            and not (rules.is_aqueduct(d) and not (gmap.distance(c, n) == 1
                                                                   and rules.fresh_water_source(gmap, n)))]
+    improvements = tuple(i for i in improvements if i in rules.improvements)
+    ispots: dict[tuple[str, XY], list[XY]] = {}
+    for c in sites + own:
+        # Each city keeps only its best improvement candidates (by value): it gets at most
+        # max_improvements, and fewer variables keep the full maps fast.
+        options = [(improvement_value(rules, cfg, i, n), i, (n["x"], n["y"]))
+                   for n in gmap.within(gmap.tiles[c], rules.district_range) if (n["x"], n["y"]) not in reserved
+                   for i in improvements if rules.can_place_improvement(gmap, n, i)]
+        for _, i, t in sorted(options, key=lambda o: -o[0])[:cfg.improvement_candidates]:
+            ispots.setdefault((i, c), []).append(t)
+    improvements_left = {e: max(0, cfg.max_improvements - n) for e, n in existing_improvements(gmap, rules).items()}
     if n_cities == "max":
         n_cities = len(sites)
     return Instance(gmap, rules, cfg, int(n_cities), tuple(districts), sites, {c: site[c] for c in sites},
-                    own, specialty_left, spots, rules.neighbour_bonuses(tuple(districts)))
+                    own, specialty_left, spots, rules.neighbour_bonuses(tuple(districts)),
+                    improvements, ispots, improvements_left,
+                    rules.improvement_bonuses(tuple(districts), improvements))
+
+
+def existing_improvements(gmap: GameMap, rules: Rules) -> dict[XY, int]:
+    """Number of (plannable) improvements on the tiles each of the player's cities owns."""
+    by_id = {c["id"]: (c["x"], c["y"]) for c in gmap.own_cities if (c["x"], c["y"]) in gmap.tiles}
+    count = {xy: 0 for xy in by_id.values()}
+    for t in gmap:
+        if t["owner"] == gmap.player and t.get("city") in by_id and t.get("improvement", "NONE") in rules.improvements:
+            count[by_id[t["city"]]] += 1
+    return count
 
 
 def existing_cities(gmap: GameMap) -> tuple[list[XY], dict[XY, set[str]]]:
@@ -192,6 +235,32 @@ def _partner_vars(inst: Instance, d2: str, c: XY, t: XY) -> list[Var]:
     """z[d2,c,u] for the tiles u next to t where city c's district d2 may go."""
     return [inst.z[d2, c, u] for u in inst.spots.get((d2, c), [])
             if inst.gmap.distance(t, u) == 1]
+
+
+def improvement_vars(m: Model, inst: Instance) -> None:
+    """w[i,c,t] = 1: city c's improvement i goes on tile t (within 3 of c)."""
+    for (i, c), tiles in inst.ispots.items():
+        for t in tiles:
+            inst.w[i, c, t] = m.var(("imp", i, c, t))
+
+
+def improvement_bonus_vars(m: Model, inst: Instance) -> None:
+    """q[d,i,c,u] in [0,1]: city c's improvement i on u touches c's district d, for
+    districts with a per-improvement bonus (Industrial Zone: quarries, mines, lumber
+    mills). One d per city, so the count of improvements next to it is sum_u q.
+    At an optimum q = min(w[i,c,u], sum of z[d,c,t] next to u)."""
+    for d, i, _, _ in inst.ibonuses:
+        for (ii, c), tiles in inst.ispots.items():
+            if ii != i or (d, c) not in inst.spots:
+                continue
+            for u in tiles:
+                if _district_next_to(inst, d, c, u):
+                    inst.q[d, i, c, u] = m.var(("ibonus", d, i, c, u), integer=False)
+
+
+def _district_next_to(inst: Instance, d: str, c: XY, u: XY) -> list[Var]:
+    """z[d,c,t] for the tiles t next to u where city c's district d may go."""
+    return [inst.z[d, c, t] for t in inst.spots.get((d, c), []) if inst.gmap.distance(t, u) == 1]
 
 
 # --- Constraints -------------------------------------------------------------
@@ -266,6 +335,34 @@ def specialty_limit(m: Model, inst: Instance) -> None:
             m.row([(v, 1) for v in vs], hi=inst.specialty_left.get(c, k))
 
 
+def improvement_limit(m: Model, inst: Instance) -> None:
+    """(9) At most L improvements per city (problem.max_improvements), only if it exists:
+    sum_{i,t} w[i,c,t] <= L x[c] for a new city, <= L - (already improved) for an existing one.
+    Also, per new city and tile, sum_i w[i,c,t] <= x[c]: implied, but much tighter."""
+    k = inst.cfg.max_improvements
+    per_city: dict[XY, list[Var]] = {}
+    per_tile: dict[tuple[XY, XY], list[Var]] = {}
+    for (i, c, t), v in inst.w.items():
+        per_city.setdefault(c, []).append(v)
+        if c in inst.x:
+            per_tile.setdefault((c, t), []).append(v)
+    for (c, t), vs in per_tile.items():
+        m.row([(v, 1) for v in vs] + [(inst.x[c], -1)], hi=0)
+    for c, vs in per_city.items():
+        if c in inst.x:
+            m.row([(v, 1) for v in vs] + [(inst.x[c], -k)], hi=0)
+        else:
+            m.row([(v, 1) for v in vs], hi=inst.improvements_left.get(c, k))
+
+
+def improvement_bonus_link(m: Model, inst: Instance) -> None:
+    """(10) q[d,i,c,u] <= w[i,c,u] and q[d,i,c,u] <= sum_{t next to u} z[d,c,t]: the
+    improvement is there and touches the city's district d (at most one per city)."""
+    for (d, i, c, u), v in inst.q.items():
+        m.row({v: 1, inst.w[i, c, u]: -1}, hi=0)
+        m.row([(v, 1)] + [(z, -1) for z in _district_next_to(inst, d, c, u)], hi=0)
+
+
 def not_next_to_planned_city(m: Model, inst: Instance) -> None:
     """(5) Districts that may not touch a city centre (Encampment) stay off tiles next to
     another planned city: z[d,c,t] + x[c'] <= 1 for c' next to t. (Its own city c is
@@ -316,6 +413,8 @@ def one_thing_per_tile(m: Model, inst: Instance) -> None:
         occ.setdefault(c, []).append(v)
     for (d, c, t), v in inst.z.items():
         occ.setdefault(t, []).append(v)
+    for (i, c, t), v in inst.w.items():
+        occ.setdefault(t, []).append(v)
     for names in occ.values():
         if len(names) > 1:
             m.row([(v, 1) for v in names], hi=1)
@@ -354,6 +453,22 @@ def neighbour_bonus_term(m: Model, inst: Instance) -> None:
         m.add_obj(v, value[d, d2])
 
 
+def improvement_term(m: Model, inst: Instance) -> None:
+    """+ (v(gain_i) + worked_tile_factor v(t)) w[i,c,t]: an improved tile is worked."""
+    for (i, c, t), v in inst.w.items():
+        m.add_obj(v, improvement_value(inst.rules, inst.cfg, i, inst.gmap.tiles[t]))
+
+
+def improvement_bonus_term(m: Model, inst: Instance) -> None:
+    """+ w_k change q[d,i,c,t]: e.g. +1 production (weighted) per quarry next to an
+    Industrial Zone, +0.5 per mine (the game's +1 per 2, taken linearly)."""
+    value: dict[tuple[str, str], float] = {}
+    for d, i, k, change in inst.ibonuses:
+        value[d, i] = value.get((d, i), 0.0) + inst.cfg.weights[k] * change
+    for (d, i, c, t), v in inst.q.items():
+        m.add_obj(v, value[d, i])
+
+
 def city_bonus_term(m: Model, inst: Instance) -> None:
     """+ city_bonus x[c]: found the cities asked for whenever possible."""
     for v in inst.x.values():
@@ -370,6 +485,8 @@ VARIABLES: list[Step] = [
     city_vars,
     district_vars,
     neighbour_bonus_vars,
+    improvement_vars,
+    improvement_bonus_vars,
 ]
 CONSTRAINTS: list[Step] = [
     max_cities,
@@ -380,12 +497,16 @@ CONSTRAINTS: list[Step] = [
     one_dam_per_river,
     neighbour_bonus_link,
     specialty_limit,
+    improvement_limit,
+    improvement_bonus_link,
 ]
 OBJECTIVE: list[Step] = [
     site_term,
     adjacency_term,
     covered_tile_term,
     neighbour_bonus_term,
+    improvement_term,
+    improvement_bonus_term,
     city_bonus_term,
     district_bonus_term,
 ]
@@ -399,13 +520,14 @@ def build(inst: Instance) -> Model:
 
 
 def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: int | str | None = None,
-             districts: tuple[str, ...] | None = None) -> Plan:
-    """Best plan for n_cities new cities, each with one of each district, plus the
-    districts the player's existing cities don't have yet.
-    cfg: a Config (None: config/default.toml); n_cities, districts override it."""
+             districts: tuple[str, ...] | None = None, improvements: tuple[str, ...] | None = None) -> Plan:
+    """Best plan for n_cities new cities with their districts and improvements, plus the
+    districts and improvements the player's existing cities can still get.
+    cfg: a Config (None: config/default.toml); n_cities, districts, improvements override it."""
     cfg = cfg or config.default()
     inst = prepare(gmap, rules, cfg, cfg.n_cities if n_cities is None else n_cities,
-                   cfg.districts if districts is None else districts, cfg.max_city_candidates)
+                   cfg.districts if districts is None else districts, cfg.max_city_candidates,
+                   cfg.improvements if improvements is None else improvements)
     m = build(inst)
     sol = m.solve(cfg.solver)
     plan = Plan(log=sol.log, info={"status": sol.status, "seconds": round(sol.seconds, 3), "objective": sol.objective,
@@ -419,4 +541,7 @@ def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: i
     for (d, c, t), v in inst.z.items():
         if sol[v] > 0.5:
             plan.districts.append((d, t, c))
+    for (i, c, t), v in inst.w.items():
+        if sol[v] > 0.5:
+            plan.improvements.append((i, t, c))
     return plan

@@ -64,10 +64,12 @@ checked against each other. Defaults are those of <code>config/default.toml</cod
   <li>tiles on which to found <b>new cities</b> (by default as many as fit), and</li>
   <li>for each new city and each of the player's <b>existing cities</b>, a tile for each planned <b>district</b> it does not
   have yet (Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor, Aqueduct, Dam),</li>
+  <li>for each city, up to five tiles to <b>improve</b> (Farm, Mine, Quarry, Plantation, Camp, Pasture, Fishing Boats,
+  Lumber Mill),</li>
 </ul>
-<p>so as to maximise the weighted yields of the city sites plus the districts' adjacency bonuses, minus the yields of the
-tiles the districts cover. The game's placement rules are enforced partly by which variables exist (sets \(C\) and
-\(R_{d,c}\)) and partly by linear constraints (1)–(8).</p>
+<p>so as to maximise the weighted yields of the city sites, the districts' adjacency bonuses and the improved (worked)
+tiles, minus the yields of the tiles the districts cover. The game's placement rules are enforced partly by which variables exist (sets \(C\) and
+\(R_{d,c}\), \(G_{i,c}\)) and partly by linear constraints (1)–(10).</p>
 <p>The model is built in three steps, each a list of small functions in <code>model.py</code>:
 <code>VARIABLES</code>, <code>CONSTRAINTS</code>, <code>OBJECTIVE</code>. Commenting out a line drops that constraint or term;
 each run's log lists the ones that were on.</p>
@@ -103,7 +105,7 @@ nobody). A tile is <i>available to the player</i> when \(\text{own}(t)\in\{-1,p\
 \text{faith}\}\). \(y_{t,k}\ge0\) is the yield \(k\) of tile \(t\) as the game reports it (terrain, feature, visible
 resource, improvement).</div>
 <div class="def"><b>Weights.</b> \(w_k\ge0\), the value of one unit of yield \(k\) (<code>objective.weights</code>; default
-food 1, production 2, gold 0.5, science 2, culture 0.5, faith 0.5). For any yield vector \(\eta\),
+food 2, production 2, gold 0.5, science 2, culture 0.5, faith 0.5). For any yield vector \(\eta\),
 $$ v(\eta) = \sum_{k\in Y} w_k\,\eta_k, \qquad v(t) = v(y_{t,\cdot}). $$
 <span class="muted"><code>Config.weighted</code>.</span></div>
 <div class="def"><b>Site value</b> of a city on \(c\), with site radius \(\sigma\) (<code>objective.site_radius</code>, 2):
@@ -164,6 +166,35 @@ N_{\rho_D}(c)\cap V_d & \text{otherwise,}
 defined for every \(d\in D\) if \(c\in C\), and for \(d\in D\setminus B_c\) if \(c\in E\) (a city never gets a second
 district of a type it has). <span class="muted"><code>prepare</code> (<code>spots</code>).</span></div>
 
+<h3>Improvements</h3>
+<div class="def"><b>Improvement types.</b> \(I\) = <code>problem.improvements</code>: Farm, Mine, Quarry, Plantation, Camp, Pasture,
+Fishing Boats, Lumber Mill. Each \(i\) has, from the database (rows needing a technology or civic left out):
+its yield gain \(g_i\) (<code>Improvement_YieldChanges</code>: Farm +1 food, Mine +1 production, Quarry +1 production,
+Plantation +2 gold, Camp +2 gold, Pasture +1 production, Fishing Boats +1 food, Lumber Mill +2 production), its valid
+resources, features and terrains, and whether it goes on water (<code>Domain</code>).
+<span class="muted"><code>Rules._read_improvements</code>.</span></div>
+<div class="def"><b>Valid tiles</b> \(W_i\subseteq T\): \(t\in W_i\) iff \(t\) holds no city, district or improvement, is not a
+mountain, impassable, wonder or natural wonder, is available to the player, \(t\notin P\), is water exactly when \(i\) is a
+sea improvement, and
+<ul>
+  <li>if \(t\) has a (visible) resource: \(i\) is valid for it (<code>Improvement_ValidResources</code>), so a resource tile
+  only takes its own improvement;</li>
+  <li>else if \(t\) has a feature: \(i\) allows that feature (<code>Improvement_ValidFeatures</code>: Farm on floodplains, Lumber
+  Mill on forest);</li>
+  <li>else: \(i\) allows its terrain (<code>Improvement_ValidTerrains</code>: Farm on grassland or plains, Mine on hills).</li>
+</ul>
+<span class="muted"><code>Rules.can_place_improvement</code>.</span></div>
+<div class="def"><b>Improvement value.</b> A city works only some tiles, and the ones it improves are the ones it works,
+so improving \(t\) with \(i\) is worth the whole tile:
+$$ h_{i,t} \;=\; v(g_i) \;+\; \mu\, v(t), $$
+with \(\mu\) = <code>objective.worked_tile_factor</code> (1). Improving an already good tile beats improving a poor one.
+(\(v(t)\) is also in the city's site value \(s_c\); counting it again rewards working the best tiles.)
+<span class="muted"><code>improvement_value</code>.</span></div>
+<div class="def"><b>Candidates.</b> For a city \(c\in C\cup E\), the options \(\{(i,t): t\in N_{\rho_D}(c)\cap W_i\}\) are ranked by
+\(h_{i,t}\) and only the best \(J\) are kept (<code>problem.improvement_candidates</code>, 6). \(G_{i,c}\) is the set of tiles
+kept for improvement \(i\). <span class="muted">A simplification for speed: with all options, the full maps hit the time
+limit; with \(J=6\), one more than the five a city may build, a city can still swap a tile a district takes.</span></div>
+
 <h2 id="adjacency">6. Adjacency</h2>
 <p>Each district type \(d\) has a set of adjacency rules \(\mathcal{A}_d\) read from the game database
 (<code>District_Adjacencies</code> joined with <code>Adjacency_YieldChanges</code>; <code>Rules._read_adjacencies</code>). Rules
@@ -220,6 +251,18 @@ z_{d,c,t} &\in \{0,1\} && (d,c,t)\in Z && \text{city } c\text{'s district } d \t
 $$
 </div>
 <p>Existing cities have no \(x\) variable: they are always there.</p>
+<h3>Improvements</h3>
+<p>With \(Q=\{(i,c,t): c\in C\cup E,\ t\in G_{i,c}\}\), and for district–improvement rules (§6, "\(+\Delta\) per \(m\)
+neighbouring \(i\)" for a planned district \(d\); with the defaults, the Industrial Zone's quarry, mine and lumber mill
+rules) the per-improvement value \(e_{d,i}=\sum w_k\Delta/m\) (the floor taken linearly: +0.5 per mine):</p>
+<div class="card">
+$$
+\begin{aligned}
+\omega_{i,c,t} &\in \{0,1\} && (i,c,t)\in Q && \text{city } c \text{ improves } t \text{ with } i && \texttt{improvement\_vars}\\
+q_{d,i,c,u} &\in [0,1] && (i,c,u)\in Q,\ N_1(u)\cap R_{d,c}\ne\emptyset && c\text{'s } i \text{ on } u \text{ touches } c\text{'s } d && \texttt{improvement\_bonus\_vars}
+\end{aligned}
+$$
+</div>
 <h3>Neighbour bonuses between planned districts of one city</h3>
 <p>Let \(\mathcal{B}\) be the set of pairs \((d,d')\in D\times D\), \(d\ne d'\), such that \(\mathcal{A}_d\) has a one-tile rule
 "\(+\Delta\) of yield \(k\) per neighbouring \(d'\)"; its weighted value is \(b_{d,d'}=\sum w_k\Delta\) over those rules
@@ -245,6 +288,8 @@ f(x,z) \;=\; \underbrace{\sum_{c\in C} s_c\,x_c}_{\texttt{site\_term}}
 \;+\; \underbrace{\sum_{(d,c,t)\in Z} a_{d,c,t}\,z_{d,c,t}}_{\texttt{adjacency\_term}}
 \;-\; \underbrace{\lambda\!\!\sum_{(d,c,t)\in Z}\!\! v(t)\,z_{d,c,t}}_{\texttt{covered\_tile\_term}}
 \;+\; \underbrace{\sum b_{d,d'}\,y_{d,d',c,t}}_{\texttt{neighbour\_bonus\_term}}
+\;+\; \underbrace{\sum_{Q} h_{i,t}\,\omega_{i,c,t}}_{\texttt{improvement\_term}}
+\;+\; \underbrace{\sum e_{d,i}\,q_{d,i,c,u}}_{\texttt{improvement\_bonus\_term}}
 \;+\; \underbrace{\beta_C\sum_{c\in C} x_c}_{\texttt{city\_bonus\_term}}
 \;+\; \underbrace{\beta_D\!\!\sum_{(d,c,t)\in Z}\!\! z_{d,c,t}}_{\texttt{district\_bonus\_term}}
 $$
@@ -322,12 +367,25 @@ $$ \sum_{d\in D^{\text{pop}}}\ \sum_{t\in R_{d,c}} z_{d,c,t} \;\le\; K\,x_c \qua
 (<code>DISTRICT_POPULATION_REQUIRED_PER</code> = 3). The model uses a fixed \(K\) (<code>problem.max_specialty_districts</code>,
 3, i.e. a city of 7–9 citizens), so each city keeps its best \(K\); the Aqueduct and Dam don't count.</p>
 
+<h3><span class="tag">(9)</span>Improvements per city · <code>improvement_limit</code></h3>
+$$ \sum_{(i,t)} \omega_{i,c,t} \;\le\; L\,x_c,\quad \sum_i \omega_{i,c,t} \;\le\; x_c\ \ \forall t \qquad (c\in C), \qquad\qquad
+\sum_{(i,t)} \omega_{i,e,t} \;\le\; \max(0,\,L-\ell_e) \qquad (e\in E), $$
+<p class="muted">\(L\) = <code>problem.max_improvements</code> (5); \(\ell_e\) = improvements already on the tiles city \(e\) owns.
+The per-tile row is implied but tightens the relaxation. Constraint (4) also covers improvements: one city, district or
+improvement per tile.</p>
+
+<h3><span class="tag">(10)</span>Improvement bonus only when both are there · <code>improvement_bonus_link</code></h3>
+$$ q_{d,i,c,u} \;\le\; \omega_{i,c,u}, \qquad q_{d,i,c,u} \;\le\; \sum_{t\in N_1(u)\cap R_{d,c}} z_{d,c,t} . $$
+<p class="muted">One \(d\) per city, so the right-hand sums are at most 1 and no big-M is needed; \(\sum_u q\) counts the
+improvements next to the city's \(d\). (A first form with one variable per district tile and a bound of 6 left the full
+maps 12% from optimal at the time limit.)</p>
+
 <h2 id="full">10. The full programme</h2>
 <div class="card">
 $$
 \begin{aligned}
-\max_{x,\,z,\,y}\quad & \sum_{c\in C}(s_c+\beta_C)\,x_c \;+\; \sum_{(d,c,t)\in Z}\big(a_{d,c,t}-\lambda\,v(t)+\beta_D\big)\,z_{d,c,t}
-\;+\; \sum b_{d,d'}\,y_{d,d',c,t}\\[4pt]
+\max_{x,\,z,\,y,\,\omega,\,q}\quad & \sum_{c\in C}(s_c+\beta_C)\,x_c \;+\; \sum_{(d,c,t)\in Z}\big(a_{d,c,t}-\lambda\,v(t)+\beta_D\big)\,z_{d,c,t}
+\;+\; \sum b_{d,d'}\,y_{d,d',c,t} \;+\; \sum_Q h_{i,t}\,\omega_{i,c,t} \;+\; \sum e_{d,i}\,q_{d,i,c,u}\\[4pt]
 \text{s.t.}\quad & \textstyle\sum_{c\in C} x_c \le n && (1)\\
 & \textstyle\sum_{c\in Q} x_c \le 1 \ \ \forall Q\in\mathcal{Q}, \qquad x_a+x_b\le 1 \ \ \forall\{a,b\}\in U && (2)\\
 & \textstyle\sum_{t\in R_{d,c}} z_{d,c,t} \le x_c \ \ \forall c\in C,\, d\in D && (3a)\\
@@ -337,7 +395,9 @@ $$
 & y_{d,d',c,t} \le z_{d,c,t},\ \ y_{d,d',c,t} \le \textstyle\sum_{u\in N_1(t)\cap R_{d',c}} z_{d',c,u},\ \ \sum_t y_{d,d',c,t} \le \sum_{u} z_{d',c,u} && (6)\\
 & \textstyle\sum_{d\in D^{\text{dam}},\,\text{riv}(t)=r} z_{d,c,t} \le 1 \ (0 \text{ if dammed}) \ \ \forall \text{ rivers } r && (7)\\
 & \textstyle\sum_{d\in D^{\text{pop}},\,t} z_{d,c,t} \le K x_c \ \forall c\in C, \qquad \sum_{d\in D^{\text{pop}},\,t} z_{d,e,t} \le \max(0,K-\beta_e) \ \forall e\in E && (8)\\
-& x\in\{0,1\}^{C},\quad z\in\{0,1\}^{Z},\quad y\in[0,1]
+& \textstyle\sum_{(i,t)} \omega_{i,c,t} \le L x_c,\ \sum_i \omega_{i,c,t}\le x_c \ \forall c\in C, \qquad \sum_{(i,t)} \omega_{i,e,t} \le \max(0,L-\ell_e) \ \forall e\in E && (9)\\
+& q_{d,i,c,u} \le \omega_{i,c,u},\ \ q_{d,i,c,u} \le \textstyle\sum_{t\in N_1(u)\cap R_{d,c}} z_{d,c,t} && (10)\\
+& x\in\{0,1\}^{C},\quad z\in\{0,1\}^{Z},\quad \omega\in\{0,1\}^{Q},\quad y, q\in[0,1]
 \end{aligned}
 $$
 </div>
@@ -361,12 +421,15 @@ $$
 <h2 id="score">12. Score and evaluation</h2>
 <p>The <b>score</b> reported for a plan leaves the bonuses out and is recomputed in plain Python by <code>evaluate</code>,
 for any plan (the MIP's or the greedy stub's):</p>
-$$ S \;=\; \sum_{c\ \text{new}} s_c \;+\; \sum_{(d,c,t)\ \text{planned}} v\big(A_{d,\cdot}(t;\Pi^{\text{all}})\big) \;-\; \lambda\!\!\sum_{(d,c,t)\ \text{planned}}\!\! v(t), $$
-<p>where \(\Pi^{\text{all}}\) holds <i>every</i> planned city centre and district. Every predicate is monotone in \(\Pi\),
+$$ S \;=\; \sum_{c\ \text{new}} s_c \;+\; \sum_{(d,c,t)\ \text{planned}} v\big(A_{d,\cdot}(t;\Pi^{\text{all}})\big) \;-\; \lambda\!\!\sum_{(d,c,t)\ \text{planned}}\!\! v(t)
+\;+\; \sum_{(i,c,t)\ \text{planned}} h_{i,t}, $$
+<p>where \(\Pi^{\text{all}}\) holds <i>every</i> planned city centre, district and improvement. (Mines and lumber mills count
+with the game's floor here, \(\lfloor\text{count}/2\rfloor\), against \(0.5\) each in the MIP, so \(S\) can be slightly
+below the MIP's value for an odd count.) Every predicate is monotone in \(\Pi\),
 so \(A(t;\Pi^{\text{all}})\ge A(t;\{c\mapsto\text{city centre}\})\) and</p>
 $$ S \;\ge\; f(x^\star,z^\star,y^\star) - \beta_C\,|x^\star| - \beta_D\,|z^\star| , $$
 <p>(with the neighbour bonuses \(b\,y\) included in \(f\)), with equality when the only planned-next-to-planned bonuses
-are those of §7. The tests check the equality on
+are those of §7, the only exception to \(\ge\) being the mine and lumber-mill rounding above. The tests check the equality on
 maps where that holds. The "+n" badges on tacks are the per-yield bonuses \(A_{d,k}(t;\Pi^{\text{all}})\).</p>
 
 <h2 id="parameters">13. Parameters</h2>
@@ -378,8 +441,12 @@ the values used.</p>
   <tr><td>\(n\)</td><td><code>problem.n_cities</code></td><td><code>"max"</code></td><td>New cities to found; <code>"max"</code> means \(|C|\)</td></tr>
   <tr><td>\(D\)</td><td><code>problem.districts</code></td><td>the nine above</td><td>Districts planned per city</td></tr>
   <tr><td>\(M\)</td><td><code>problem.max_city_candidates</code></td><td>400</td><td>Best sites by \(s_c\) kept as \(C\)</td></tr>
+  <tr><td>\(I\)</td><td><code>problem.improvements</code></td><td>the eight above</td><td>Improvements planned</td></tr>
+  <tr><td>\(L\)</td><td><code>problem.max_improvements</code></td><td>5</td><td>Improvements per city</td></tr>
+  <tr><td>\(J\)</td><td><code>problem.improvement_candidates</code></td><td>6</td><td>Best (improvement, tile) options kept per city</td></tr>
+  <tr><td>\(\mu\)</td><td><code>objective.worked_tile_factor</code></td><td>1</td><td>Share of an improved tile's own yields counted</td></tr>
   <tr><td>\(K\)</td><td><code>problem.max_specialty_districts</code></td><td>3</td><td>Specialty districts per city (population limit)</td></tr>
-  <tr><td>\(w_k\)</td><td><code>objective.weights</code></td><td>food 1, production 2, gold 0.5, science 2, culture 0.5, faith 0.5</td><td>Value of one unit of each yield (placeholders; science and production first for now)</td></tr>
+  <tr><td>\(w_k\)</td><td><code>objective.weights</code></td><td>food 2, production 2, gold 0.5, science 2, culture 0.5, faith 0.5</td><td>Value of one unit of each yield (placeholders; food, production and science first for now: cities must grow to get their districts)</td></tr>
   <tr><td>\(\sigma\)</td><td><code>objective.site_radius</code></td><td>2</td><td>Radius of the site value</td></tr>
   <tr><td>\(\lambda\)</td><td><code>objective.loss_factor</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
   <tr><td>\(\beta_C\)</td><td><code>objective.city_bonus</code></td><td>100</td><td>Per new city</td></tr>
@@ -397,18 +464,19 @@ run's <code>optimisation.log</code>. Status <code>optimal</code> means proven op
 \(|D|(|C|+|E|)\) for (3); at most \(|T|\) for (4); one per pair of Encampment variable and neighbouring site for (5).</p>
 <table>
   <tr><th>Test case (tiles)</th><th>New cities</th><th>\(|C|\)</th><th>Variables</th><th>Rows</th><th>Time</th></tr>
-  <tr><td>continents-revealed (43)</td><td>5</td><td>38</td><td>4,797</td><td>4,088</td><td>0.8 s</td></tr>
-  <tr><td>continents-radius6 (127)</td><td>12</td><td>103</td><td>16,089</td><td>14,669</td><td>4.2 s</td></tr>
-  <tr><td>continents (3,404)</td><td>56</td><td>400</td><td>65,032</td><td>45,824</td><td>19 s</td></tr>
-  <tr><td>shuffle-revealed (43)</td><td>5</td><td>38</td><td>4,990</td><td>4,324</td><td>1.7 s</td></tr>
-  <tr><td>shuffle-radius6 (127)</td><td>12</td><td>109</td><td>17,369</td><td>15,425</td><td>3.4 s</td></tr>
-  <tr><td>shuffle (3,404)</td><td>56</td><td>400</td><td>69,373</td><td>48,319</td><td>58 s</td></tr>
+  <tr><td>continents-revealed (43)</td><td>5</td><td>38</td><td>5,184</td><td>4,673</td><td>0.9 s</td></tr>
+  <tr><td>continents-radius6 (127)</td><td>12</td><td>103</td><td>17,146</td><td>16,274</td><td>5.8 s</td></tr>
+  <tr><td>continents (3,404)</td><td>56</td><td>400</td><td>69,980</td><td>54,108</td><td>11 s</td></tr>
+  <tr><td>shuffle-revealed (43)</td><td>5</td><td>38</td><td>5,338</td><td>4,835</td><td>3.8 s</td></tr>
+  <tr><td>shuffle-radius6 (127)</td><td>12</td><td>109</td><td>18,371</td><td>16,889</td><td>6.2 s</td></tr>
+  <tr><td>shuffle (3,404)</td><td>57</td><td>400</td><td>72,579</td><td>54,237</td><td>32 s</td></tr>
 </table>
-<p class="muted">Default settings; all proven optimal (gap 0); about 90 s for all six. Each log ends with metrics
-(<code>metrics.py</code>): districts per city, and per district type its count, the share of cities that have one and its
-mean adjacency. On continents, with 3 specialty districts per city: 4.0 districts per city; an Industrial Zone in 96% of
-cities (mean +3.8 production), a Campus in 88% (+3.1 science), an Aqueduct in 84%, a Commercial Hub in 45%, a Harbor in
-43%, a Holy Site in 23%, a Dam in 16%; Encampments and Theaters almost never (2–4%). Logs: <code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code>.
+<p class="muted">Default settings; all proven optimal (gap 0); about 67 s for all six. (With food weighted 1, shuffle
+stopped at the 60 s limit 0.026% from optimal.) Each log ends with metrics (<code>metrics.py</code>): districts and improvements per city, and per
+type the count, the share of cities that have one, and the mean adjacency or value. On continents: 3.9 districts per
+city (an Industrial Zone in every city, a Campus in 80%, an Aqueduct in 73%, a Harbor in 46%, a Commercial Hub in 45%);
+3.9 improvements per city, mostly Lumber Mills (in 95% of cities) and Mines (45%), then Quarries, Plantations and
+Farms (18%). Logs: <code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code>.
 A live game's revealed area is the size of the first rows: under a second.</p>
 
 <h2 id="limits">15. Not modelled</h2>
@@ -422,6 +490,9 @@ A live game's revealed area is the size of the first rows: under a second.</p>
   <li><b>Tile ownership and timing.</b> In the game a district goes on a tile its city owns; borders grow over time or
   through bought tiles, and a tile belongs to one city. The model allows any free tile within 3 and lets a district sit
   in another planned city's range.</li>
+  <li><b>Improvements</b>: technology- and civic-gated rules (Farms on hills, bonus yields later in the game), Farm
+  adjacency, removing a feature to improve a tile, and builder charges are not modelled; only each city's best \(J\)
+  options are considered; a district-improvement bonus counts only the city's own improvements.</li>
   <li><b>Population over time.</b> Every city gets the same \(K\) specialty districts; in the game the limit grows with
   population, and which city grows how big (food, housing) is not modelled.</li>
   <li><b>Site value is a proxy.</b> No housing (fresh water, coast), amenities, growth over time or future improvements;

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from dataclasses import dataclass, field
 from typing import Any
 
 from . import paths
@@ -63,13 +64,43 @@ DEFAULT_ADJACENCIES: dict[str, list[AdjacencyRule]] = {"DISTRICT_CAMPUS": [
 LOCKED_RESOURCES = ("RESOURCECLASS_LUXURY", "RESOURCECLASS_STRATEGIC")
 
 
+@dataclass
+class ImprovementRule:
+    """Where an improvement may go and what it adds, from the game database (rows that
+    need a technology or civic are left out)."""
+    yields: dict[str, int] = field(default_factory=dict)   # Improvement_YieldChanges
+    terrains: set[str] = field(default_factory=set)        # Improvement_ValidTerrains
+    features: set[str] = field(default_factory=set)        # Improvement_ValidFeatures
+    resources: set[str] = field(default_factory=set)       # Improvement_ValidResources
+    sea: bool = False                                      # Domain = DOMAIN_SEA
+
+
+# The classic improvements, as in the Gathering Storm database, for when it can't be read.
+DEFAULT_IMPROVEMENTS: dict[str, ImprovementRule] = {
+    "IMPROVEMENT_FARM": ImprovementRule({"YIELD_FOOD": 1}, {"TERRAIN_GRASS", "TERRAIN_PLAINS"},
+                                        {"FEATURE_FLOODPLAINS", "FEATURE_FLOODPLAINS_GRASSLAND",
+                                         "FEATURE_FLOODPLAINS_PLAINS", "FEATURE_VOLCANIC_SOIL"},
+                                        {"RESOURCE_MAIZE", "RESOURCE_RICE", "RESOURCE_WHEAT"}),
+    "IMPROVEMENT_MINE": ImprovementRule({"YIELD_PRODUCTION": 1},
+                                        {f"TERRAIN_{t}_HILLS" for t in ("GRASS", "PLAINS", "DESERT", "TUNDRA", "SNOW")},
+                                        {"FEATURE_VOLCANIC_SOIL"},
+                                        {"RESOURCE_IRON", "RESOURCE_COPPER", "RESOURCE_SALT", "RESOURCE_SILVER",
+                                         "RESOURCE_DIAMONDS", "RESOURCE_JADE", "RESOURCE_MERCURY", "RESOURCE_NITER",
+                                         "RESOURCE_COAL", "RESOURCE_ALUMINUM", "RESOURCE_URANIUM", "RESOURCE_AMBER"}),
+    "IMPROVEMENT_QUARRY": ImprovementRule({"YIELD_PRODUCTION": 1}, set(), set(),
+                                          {"RESOURCE_STONE", "RESOURCE_MARBLE", "RESOURCE_GYPSUM"}),
+    "IMPROVEMENT_LUMBER_MILL": ImprovementRule({"YIELD_PRODUCTION": 2}, set(), {"FEATURE_FOREST"}, set()),
+}
+
+
 class Rules:
     def __init__(self, city_min_range: int = 3, district_range: int = 3,
                  resource_class: dict[str, str] | None = None, no_settle_features: tuple[str, ...] = (),
                  adjacencies: dict[str, list[AdjacencyRule]] | None = None,
                  placement: dict[str, dict[str, int]] | None = None,
                  required_features: dict[str, set[str]] | None = None,
-                 valid_terrains: dict[str, set[str]] | None = None):
+                 valid_terrains: dict[str, set[str]] | None = None,
+                 improvements: dict[str, ImprovementRule] | None = None):
         # A new city centre must be more than city_min_range tiles from any other.
         self.city_min_range = city_min_range
         # Districts go within district_range tiles of their city centre.
@@ -83,6 +114,8 @@ class Rules:
         # District -> features it must go on / terrains it may go on (empty: no rule).
         self.required_features = dict(DEFAULT_REQUIRED_FEATURES if required_features is None else required_features)
         self.valid_terrains = dict(valid_terrains or {})
+        # Improvement -> where it may go and its yields.
+        self.improvements = dict(DEFAULT_IMPROVEMENTS if improvements is None else improvements)
 
     @classmethod
     def from_game(cls, db_path: str = paths.GAMEPLAY_DB) -> Rules:
@@ -101,9 +134,32 @@ class Rules:
                            db.execute(f"SELECT DistrictType, {', '.join(PLACEMENT_FLAGS)} FROM Districts")},
                 required_features=cls._read_sets(db, "District_RequiredFeatures", "FeatureType"),
                 valid_terrains=cls._read_sets(db, "District_ValidTerrains", "TerrainType"),
+                improvements=cls._read_improvements(db),
             )
         finally:
             db.close()
+
+    @staticmethod
+    def _read_improvements(db: sqlite3.Connection) -> dict[str, ImprovementRule]:
+        """Buildable, non-unique improvements; placement rows needing a tech or civic
+        (e.g. Farms on hills) are left out, like gated adjacency rules."""
+        out = {i: ImprovementRule(sea=(dom == "DOMAIN_SEA")) for i, dom in db.execute(
+            "SELECT ImprovementType, Domain FROM Improvements WHERE TraitType IS NULL AND Buildable = 1")}
+        for i, y, n in db.execute("SELECT ImprovementType, YieldType, YieldChange FROM Improvement_YieldChanges"):
+            if i in out and n:
+                out[i].yields[y] = n
+        for i, t in db.execute("SELECT ImprovementType, TerrainType FROM Improvement_ValidTerrains "
+                               "WHERE PrereqTech IS NULL AND PrereqCivic IS NULL"):
+            if i in out:
+                out[i].terrains.add(t)
+        for i, f in db.execute("SELECT ImprovementType, FeatureType FROM Improvement_ValidFeatures "
+                               "WHERE PrereqTech IS NULL AND PrereqCivic IS NULL"):
+            if i in out:
+                out[i].features.add(f)
+        for i, r in db.execute("SELECT ImprovementType, ResourceType FROM Improvement_ValidResources"):
+            if i in out:
+                out[i].resources.add(r)
+        return out
 
     @staticmethod
     def _read_sets(db: sqlite3.Connection, table: str, column: str) -> dict[str, set[str]]:
@@ -155,10 +211,13 @@ class Rules:
         return out
 
     def adjacency(self, gmap: GameMap, tile: Tile, district: str,
-                  planned: dict[XY, str] | None = None) -> dict[str, int]:
+                  planned: dict[XY, str] | None = None,
+                  improved: dict[XY, str] | None = None) -> dict[str, int]:
         """{yield: bonus} the district would get on `tile`. planned: {(x, y): district
-        type} of districts the plan adds (a planned city counts as DISTRICT_CITY_CENTER)."""
+        type} of districts the plan adds (a planned city counts as DISTRICT_CITY_CENTER);
+        improved: {(x, y): improvement type} the plan adds."""
         planned = planned or {}
+        improved = improved or {}
 
         def district_at(n: Tile) -> str:
             if (n["x"], n["y"]) in planned:
@@ -179,7 +238,8 @@ class Rules:
             elif "district" in rule:
                 count = sum(1 for n in neighbours if district_at(n) == rule["district"])
             elif "improvement" in rule:
-                count = sum(1 for n in neighbours if n.get("improvement") == rule["improvement"])
+                count = sum(1 for n in neighbours
+                            if improved.get((n["x"], n["y"]), n.get("improvement")) == rule["improvement"])
             elif "resource_class" in rule:
                 count = sum(1 for n in neighbours
                             if self.resource_class.get(n.get("resource", "NONE")) == rule["resource_class"])
@@ -248,6 +308,33 @@ class Rules:
     def no_adjacent_city(self, district: str) -> bool:
         """The district may not touch any city centre (Encampment)."""
         return bool(self.placement.get(district, {}).get("NoAdjacentCity"))
+
+    def can_place_improvement(self, gmap: GameMap, tile: Tile, improvement: str) -> bool:
+        """Can `improvement` go on `tile`? A tile with a (visible) resource only takes that
+        resource's improvements; otherwise a feature must be one the improvement allows,
+        and a bare tile's terrain one it allows. Never on a city, district, wonder,
+        mountain, existing improvement, or a tile owned by someone else."""
+        rule = self.improvements.get(improvement)
+        if rule is None or tile["is_city"] or tile["district"] != "NONE" or tile.get("improvement", "NONE") != "NONE":
+            return False
+        if tile["mountain"] or tile["impassable"] or tile["natural_wonder"] or tile["wonder"] != "NONE":
+            return False
+        if tile["owner"] not in (-1, gmap.player) or bool(tile["water"]) != rule.sea:
+            return False
+        if tile["resource"] != "NONE":
+            return tile["resource"] in rule.resources
+        if tile["feature"] != "NONE":
+            return tile["feature"] in rule.features
+        return tile["terrain"] in rule.terrains
+
+    def improvement_bonuses(self, districts: tuple[str, ...],
+                            improvements: tuple[str, ...]) -> list[tuple[str, str, str, float]]:
+        """(d, i, yield, change per improvement) for every rule giving planned district d a
+        bonus per neighbouring improvement i (e.g. Industrial Zone +1 per quarry, +1 per 2
+        mines: 0.5 per mine, the floor taken linearly)."""
+        return [(d, rule["improvement"], rule["yield"], rule["change"] / rule["tiles"])
+                for d in districts for rule in self.adjacencies.get(d, [])
+                if rule.get("improvement") in improvements]
 
     def is_specialty(self, district: str) -> bool:
         """Counts against the city's population limit (Districts.RequiresPopulation): every

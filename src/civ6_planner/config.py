@@ -27,6 +27,10 @@ class Config:
     districts: tuple[str, ...]     # district types, e.g. DISTRICT_CAMPUS
     max_city_candidates: int
     max_specialty_districts: int   # per city, districts that need population (RequiresPopulation)
+    improvements: tuple[str, ...]  # improvement types to plan
+    max_improvements: int          # per city
+    improvement_candidates: int    # per city, best (improvement, tile) options kept as variables
+    worked_tile_factor: float      # share of an improved tile's own yields counted (it is worked)
     site_radius: int
     loss_factor: float
     city_bonus: float
@@ -64,6 +68,9 @@ def load(*paths: str | None) -> Config:
         n_cities=p["n_cities"], districts=tuple(p["districts"]),
         max_city_candidates=p["max_city_candidates"],
         max_specialty_districts=p["max_specialty_districts"],
+        improvements=tuple(p["improvements"]), max_improvements=p["max_improvements"],
+        improvement_candidates=p["improvement_candidates"],
+        worked_tile_factor=o["worked_tile_factor"],
         site_radius=o["site_radius"], loss_factor=o["loss_factor"],
         city_bonus=o["city_bonus"], district_bonus=o["district_bonus"],
         weights={"YIELD_" + k.upper(): float(v) for k, v in o["weights"].items()},
