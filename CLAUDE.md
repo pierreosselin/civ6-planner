@@ -181,7 +181,13 @@ Timing and reload rules:
   no dump is found).
 
 Hotkeys (in game): **Ctrl+Shift+T** place tacks from the plan; **Ctrl+Shift+F**
-capture the whole map (fog ignored) into the next save.
+capture the whole map (fog ignored) into the next save; **Ctrl+Shift+C** remove the
+planner's tacks; **Ctrl+Shift+X** remove every tack (the player's too).
+
+Map tacks: never delete pins inside a `GetMapPins()` loop (it crashed the game to
+desktop with a few dozen pins): collect ids, then `DeleteMapPin(id)` (`RemoveTacks` in
+core). Detailed Map Tacks only shows a tack's adjacency after `LuaEvents.DMT_MapPinAdded(pin)`
+(its popup sends it); the mod sends that, and `DMT_MapPinRemoved` before deleting.
 
 ## Working conventions
 

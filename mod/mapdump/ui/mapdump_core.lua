@@ -255,6 +255,58 @@ end
 -- carry TACK_PREFIX in their name; only those are ever moved or deleted, so the
 -- player's own tacks are left alone.
 
+-- Detailed Map Tacks (workshop 2428969051) works out a tack's adjacency bonus only when
+-- its own tack popup reports the tack through these LuaEvents; send the same ones so it
+-- shows the bonus on our tacks too. Does nothing without that mod.
+local function TellTackMods(eventName, pin)
+	pcall(function()
+		local event = LuaEvents[eventName]
+		if event ~= nil then event(pin) end
+	end)
+end
+
+-- Removes this mod's tacks (all = false) or every tack of the player (all = true).
+-- Returns the number removed and the tiles ("x,y" = true) of the tacks kept.
+-- Never changes the pin list while reading it: deleting pins inside the GetMapPins()
+-- loop crashed the game (to desktop) once there were a few dozen of them.
+local function RemoveTacks(playerCfg, all)
+	-- 1. Read: ids of the tacks to remove, tiles of those kept.
+	local doomed, kept = {}, {}
+	for _, pin in pairs(playerCfg:GetMapPins()) do
+		local name = pin:GetName() or ""
+		if all or name:sub(1, #TACK_PREFIX) == TACK_PREFIX then
+			table.insert(doomed, pin:GetID())
+		else
+			kept[pin:GetHexX() .. "," .. pin:GetHexY()] = true
+		end
+	end
+	-- 2. Tell Detailed Map Tacks they go, while they all still exist.
+	for _, id in ipairs(doomed) do
+		local pin = playerCfg:GetMapPinID(id)
+		if pin ~= nil then TellTackMods("DMT_MapPinRemoved", pin) end
+	end
+	-- 3. Delete them, highest id first, in case ids are positions in a list.
+	table.sort(doomed, function(a, b) return a > b end)
+	for _, id in ipairs(doomed) do
+		playerCfg:DeleteMapPin(id)
+	end
+	return #doomed, kept
+end
+
+-- Ctrl+Shift+C (all = false): the planner's tacks; Ctrl+Shift+X (all = true): every tack.
+function MapDump_ClearTacks(all)
+	local ok, result = pcall(function()
+		local playerCfg = PlayerConfigurations[Game.GetLocalPlayer()]
+		if playerCfg == nil then return "no local player" end
+		local removed = RemoveTacks(playerCfg, all)
+		Network.BroadcastPlayerInfo()
+		return "removed " .. removed .. (all and " tacks (all)" or " planner tacks")
+	end)
+	if not ok then result = "error: " .. tostring(result) end
+	MapDump_SetConfig("MAPDUMP_TACKS", PREFIX .. "TACKS|msg=clear: " .. tostring(result) .. "\n")
+	return result
+end
+
 function MapDump_PlaceTacks()
 	MapDump_Plan = nil
 	local loaded, loadErr = pcall(function() include("mapdump_plan") end)
@@ -268,19 +320,11 @@ function MapDump_PlaceTacks()
 	local playerCfg = PlayerConfigurations[playerID]
 	if playerCfg == nil then return "no local player" end
 
-	-- Remove our previous tacks and note which tiles hold the player's own.
-	local removed, theirs = 0, {}
-	for _, pin in pairs(playerCfg:GetMapPins()) do
-		local name = pin:GetName() or ""
-		if name:sub(1, #TACK_PREFIX) == TACK_PREFIX then
-			playerCfg:DeleteMapPin(pin:GetID())
-			removed = removed + 1
-		else
-			theirs[pin:GetHexX() .. "," .. pin:GetHexY()] = true
-		end
-	end
+	-- 1-3. Remove our previous tacks; note the tiles holding the player's own.
+	local removed, theirs = RemoveTacks(playerCfg, false)
 
-	local placed, skipped = 0, 0
+	-- 4. Place the plan, skipping tiles that hold one of the player's own tacks.
+	local placed, skipped, newTiles = 0, 0, {}
 	for _, tack in ipairs(MapDump_Plan) do
 		if theirs[tack.x .. "," .. tack.y] then
 			skipped = skipped + 1
@@ -290,11 +334,19 @@ function MapDump_PlaceTacks()
 			if pin ~= nil then
 				pin:SetName(TACK_PREFIX .. (tack.name or ""))
 				pin:SetIconName(tack.icon or "ICON_MAP_PIN_CIRCLE")
+				table.insert(newTiles, tack)
 				placed = placed + 1
 			end
 		end
 	end
 	Network.BroadcastPlayerInfo()
+	-- 5. Tell Detailed Map Tacks about the new ones, all placed first so planned districts
+	-- count in each other's adjacency. Pins are fetched again by tile, not kept from
+	-- step 4, in case adding pins moved them.
+	for _, tack in ipairs(newTiles) do
+		local pin = playerCfg:GetMapPin(tack.x, tack.y)
+		if pin ~= nil then TellTackMods("DMT_MapPinAdded", pin) end
+	end
 	local msg = "placed " .. placed .. ", removed " .. removed .. ", skipped " .. skipped .. " (your own tack there)"
 	MapDump_SetConfig("MAPDUMP_TACKS", PREFIX .. "TACKS|msg=" .. msg .. "\n")
 	return msg

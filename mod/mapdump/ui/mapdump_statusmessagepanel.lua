@@ -3,6 +3,7 @@
 -- On load: planned map tacks are placed and the map is dumped. Each turn: the map is dumped.
 -- Ctrl+Shift+T: place the planned tacks now, with the result shown as a status message.
 -- Ctrl+Shift+F: capture the whole map (fog ignored) for a test dataset; save afterwards.
+-- Ctrl+Shift+C: remove the planner's tacks. Ctrl+Shift+X: remove every tack, the player's too.
 -- The panel only sets its own input handler in its debug test mode, so taking it is safe.
 pcall(function() GameConfiguration.SetValue("MAPDUMP_HOOK", "MAPDUMP|STATUS|msg=statusmessagepanel hook started\n") end)
 include("statusmessagepanel")
@@ -22,6 +23,12 @@ local function OnInput(input)
 		return true
 	elseif key == Keys.F then
 		Notify("full map: " .. tostring(MapDump_CaptureFull()))
+		return true
+	elseif key == Keys.C then
+		Notify(tostring(MapDump_ClearTacks(false)))
+		return true
+	elseif key == Keys.X then
+		Notify(tostring(MapDump_ClearTacks(true)))
 		return true
 	end
 	return false

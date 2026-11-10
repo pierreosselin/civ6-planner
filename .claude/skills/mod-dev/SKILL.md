@@ -35,7 +35,8 @@ work on this Linux port, established by trial.
   data, and a `MAPDUMP|KIND|key=value|…` record format.
 - On-screen feedback: `Notify(text)` in the hook (calls the panel's `OnStatusMessage`).
 - New hotkey: add a branch in the hook's `OnInput` (Ctrl+Shift+letter, `KeyEvents.KeyUp`,
-  return `true` when handled). Taken: T (tacks), F (full capture).
+  return `true` when handled). Taken: T (tacks), F (full capture), C (clear planner
+  tacks), X (clear all tacks).
 
 ## Debugging when "nothing happens"
 
