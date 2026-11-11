@@ -494,7 +494,8 @@ A live game's revealed area is the size of the first rows: under a second.</p>
   \(m_\alpha\kappa_{\alpha,t}\le\) (matching existing neighbours) \(+\sum_{u\in N_1(t)}\sum z_{\cdot,\cdot,u}\) and
   \(\kappa_{\alpha,t}\le\lfloor 6/m_\alpha\rfloor\sum_c z_{d,c,t}\). A first try weakened the relaxation and slowed HiGHS,
   so it waits. \(S\) (§12) already counts these bonuses.</li>
-  <li><b>Tile ownership and timing.</b> In the game a district goes on a tile its city owns; borders grow over time or
+  <li><b>Tile ownership and timing</b> (measured after each solve by <code>validate.py</code>: 12–19% of districts and
+  improvements on the test maps sit next to another planned city's centre, a tile that city claims when founded). In the game a district goes on a tile its city owns; borders grow over time or
   through bought tiles, and a tile belongs to one city. The model allows any free tile within 3 and lets a district sit
   in another planned city's range.</li>
   <li><b>Improvements</b>: technology- and civic-gated rules (Farms on hills, bonus yields later in the game), Farm

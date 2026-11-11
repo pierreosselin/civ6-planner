@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from .gamemap import XY, GameMap
-from .model import CITY_CENTER, Plan, improvement_value
+from .model import CITY_CENTER, Plan, improvement_value, site_value
 from .rules import Rules
 
 
@@ -76,6 +76,36 @@ def plan_metrics(gmap: GameMap, rules: Rules, plan: Plan) -> dict[str, Any]:
             "min": min(icounts, default=0), "max": max(icounts, default=0),
         },
         "improvements_by_type": itypes,
+        "spacing": city_spacing(gmap, plan, cities),
+    }
+
+
+def _stats(values: list[int] | list[float]) -> dict[str, float]:
+    if not values:
+        return {"min": 0, "mean": 0.0, "max": 0}
+    return {"min": min(values), "mean": round(sum(values) / len(values), 2), "max": max(values)}
+
+
+def city_spacing(gmap: GameMap, plan: Plan, cities: list[XY], top: int = 3) -> dict[str, Any]:
+    """How tightly the cities are packed, in hex distance: to each city's nearest other
+    city (min/mean/max and a histogram), over all pairs, among the `top` best sites (by
+    site value), and to the nearest other player's city."""
+    if len(cities) < 2:
+        return {"cities": len(cities)}
+    nearest = [min(gmap.distance(a, b) for b in cities if b != a) for a in cities]
+    pairs = [gmap.distance(a, b) for i, a in enumerate(cities) for b in cities[i + 1:]]
+    best = sorted(cities, key=lambda c: -site_value(gmap, gmap.tiles[c], plan.config))[:top]
+    best_pairs = [gmap.distance(a, b) for i, a in enumerate(best) for b in best[i + 1:]]
+    foreign = [(t["x"], t["y"]) for t in gmap if t["is_city"] and t["owner"] != gmap.player]
+    histogram: dict[int, int] = {}
+    for d in nearest:
+        histogram[d] = histogram.get(d, 0) + 1
+    return {
+        "cities": len(cities),
+        "nearest_city": {**_stats(nearest), "histogram": dict(sorted(histogram.items()))},
+        "all_pairs": _stats(pairs),
+        f"top_{top}_sites": {"cities": best, **_stats(best_pairs)},
+        "nearest_foreign_city": _stats([min(gmap.distance(c, f) for f in foreign) for c in cities]) if foreign else None,
     }
 
 
@@ -106,6 +136,16 @@ def format_summary(m: dict[str, Any]) -> list[str]:
             for i, t in m.get("improvements_by_type", {}).items()]
     if imps:
         lines += ["  improvements: share of cities (count)"] + _wrap(imps)
+    s = m.get("spacing", {})
+    if s.get("nearest_city"):
+        nc, ap = s["nearest_city"], s["all_pairs"]
+        top = next(v for k, v in s.items() if k.startswith("top_"))
+        lines += [f"  spacing (tiles): nearest other city min {nc['min']}, mean {nc['mean']}, max {nc['max']} "
+                  f"{nc['histogram']} · all pairs min {ap['min']}, mean {ap['mean']}, max {ap['max']}",
+                  f"    best {len(top['cities'])} sites {top['cities']}: mean distance {top['mean']} "
+                  f"(min {top['min']}, max {top['max']})"
+                  + (f" · nearest other player's city: mean {s['nearest_foreign_city']['mean']}, "
+                     f"min {s['nearest_foreign_city']['min']}" if s.get("nearest_foreign_city") else "")]
     return lines
 
 

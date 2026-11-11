@@ -74,7 +74,10 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
   rivers, resources, cities, tacks, rules), [2/5] candidates, [3/5] each variable/
   constraint/objective function with the counts it adds, [4/5] HiGHS's log streamed as
   it solves (through a pseudo-terminal, `solver._capture_stdout`), [5/5] score, compact
-  metrics and where to open the map). `run.log` in the run folder holds exactly what the
+  metrics incl. city spacing, a validation of the solution against rules the model
+  leaves out (`validate.py`: tiles next to another city's centre, which that city claims
+  when founded; tiles another of your cities owns; range; shared tiles; spacing), and
+  where to open the map). `run.log` in the run folder holds exactly what the
   terminal showed for the whole run. Individual placements are in `decisions.json` and
   the map's side panel, not the log. `--planner greedy`
   runs the old stub for comparison.
@@ -219,7 +222,7 @@ core). Detailed Map Tacks only shows a tack's adjacency after `LuaEvents.DMT_Map
   classes (`GameMap`, `Rules`, `Config`, `Plan`, `Model`, `Instance`), never `object`;
   shared aliases: `Tile`, `XY` (gamemap.py), `Yields` (config.py), `Var` (solver.py),
   `AdjacencyRule` (rules.py). Check with
-  `uvx mypy --ignore-missing-imports --check-untyped-defs src/civ6_planner/{model,planner,config,solver,gamemap,rules,results,metrics}.py`.
+  `uvx mypy --ignore-missing-imports --check-untyped-defs src/civ6_planner/{model,planner,config,solver,gamemap,rules,results,metrics,validate}.py`.
 
 - The old `Mods/MapExtractorMod` (an earlier attempt) is still installed but disabled
   in game; leave it unless Pierre asks.

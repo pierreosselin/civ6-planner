@@ -41,8 +41,10 @@ It plans every test case in `data/` and writes (git-ignored):
   tacks (with tile fields and yields), notes, score and its parts, solver stats;
   `<map>/optimisation.log`: settings, map statistics, the model as it is built (counts
   per variable, constraint and objective function), the full HiGHS log, score and
-  compact metrics, and the map's path / Live Server URL (placements: `decisions.json`,
-  map side panel); `run.log`: the whole run exactly as the terminal showed it;
+  compact metrics (incl. city spacing), the validation of the solution (`validate.py`:
+  placements on another city's ring, tiles of another of your cities, range, shared
+  tiles, spacing; every case in `decisions.json` → `validation`), and the map's path /
+  Live Server URL (placements: `decisions.json`, map side panel); `run.log`: the whole run exactly as the terminal showed it;
   `summary.json`: all of them, for comparing runs (e.g. before/after a planner change).
 - The same text is printed to the console as the run goes, HiGHS's log live
   (`-q`/`--quiet` prints only the one-line summaries).

@@ -19,7 +19,7 @@ import random
 import time
 from typing import Any, Callable
 
-from . import config, dataset, metrics, model, paths, planner, viewer
+from . import config, dataset, metrics, model, paths, planner, validate, viewer
 from .gamemap import GameMap
 from .model import Plan
 from .planner import Tack
@@ -88,6 +88,7 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         planned, notes = planner.to_tacks(gmap, rules, p), planner.explain(gmap, rules, p, method)
         score, parts = model.evaluate(gmap, rules, p) if p.cities or p.districts else (0.0, {})
         stats = metrics.plan_metrics(gmap, rules, p)
+        check = validate.check_plan(gmap, rules, p)
         sc_dir = os.path.join(out_dir, name)
         os.makedirs(sc_dir, exist_ok=True)
         viewer.write(d, os.path.join(sc_dir, "map.html"), title=name, tacks=planned,
@@ -95,7 +96,7 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         record = {"name": name, "description": describe(d), "tiles": len(gmap),
                   "score": round(score, 2), "score_parts": parts,
                   "config": {"files": cfg.sources, **cfg.raw}, "solver": p.info,
-                  "metrics": stats,
+                  "metrics": stats, "validation": check,
                   "tacks": [_tack_record(gmap, t) for t in planned], "notes": notes,
                   "map": f"{name}/map.html", "log": f"{name}/optimisation.log"}
         with open(os.path.join(sc_dir, "decisions.json"), "w") as f:
@@ -107,6 +108,8 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
             say(f"  score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
                 f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}")
         for line in metrics.format_summary(stats):
+            say(line)
+        for line in validate.format_check(check):
             say(line)
         for line in _where(sc_dir):
             say(line)
