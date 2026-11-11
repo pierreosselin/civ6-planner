@@ -96,7 +96,8 @@ civ6-planner plan --config config/science.toml     # science weighted 3
 
 `data/<case>/` holds test cases: `map.json` (a map captured from a real game) and
 `config.toml` (settings for that case). `continents` and `shuffle` are fully revealed
-74×46 maps; `*-revealed` and `*-radius6` are what a player sees early on.
+74×46 maps; `*-revealed` (43 tiles) and `*-radius6` are what a player sees early on,
+`*-radius18` (about 1000 tiles) a mid-game area.
 
 ```bash
 civ6-planner results -o results/run1                              # every test case

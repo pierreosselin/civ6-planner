@@ -57,13 +57,14 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
 - `mod/mapdump/`: the Lua mod; `civ6-planner install-mod` copies it to the
   game (keeps the current plan file).
 - `data/<case>/`: one test case per folder, `map.json` + `config.toml` (settings for
-  that case over `config/default.toml`; empty templates except `continents`, which sets
-  `max_city_candidates = 1000`: all 710 legal sites, 88 cities, hits the 60 s limit).
+  that case over `config/default.toml`; empty templates except `continents`, `shuffle` and
+  `shuffle-revealed`, which set `max_city_candidates = 1000`: all legal sites; on
+  continents 710 sites, 88 cities, hits the 60 s limit).
   `--map <case>` uses both. `continents`, `shuffle`: fully revealed 74×46 maps
   (turn 2, 12–13 AI/city-state cities already founded); every tile has `revealed`
   and `resource_visible` flags from capture time. `*-revealed` (what the player had
-  revealed) and `*-radius6` (radius 6 around the player's start, visible resources
-  only) are masked maps cut from them with `make-map`; their `scenario.source` names
+  revealed) and `*-radius6` / `*-radius18` (radius 6 / 18 around the player's start, visible
+  resources only; radius 18 takes ~55–60 s, shuffle's hits the limit at a 1.2% gap) are masked maps cut from them with `make-map`; their `scenario.source` names
   the full map's case.
 - `results [-o DIR]` plans every test case in `data/` and writes `results/<date-time>/`
   (git-ignored): `index.html` (tacks and notes per case, links to each map),

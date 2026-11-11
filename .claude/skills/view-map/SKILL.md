@@ -24,7 +24,8 @@ hexes. What a tile shows:
   outline in the tack's colour. The side panel lists the tacks (click to zoom to
   one) and the planner's notes.
 
-Hover shows every tile field; drag pans, scroll zooms; checkboxes for hidden tiles
+Hover shows every tile field; drag pans, scroll zooms (by how far the wheel/touchpad
+moved, clamped; tiles carry only non-empty fields, hidden tiles are drawn on first use); checkboxes for hidden tiles
 (faded), resource labels, yields and coordinates.
 
 ## Results folder: the planner on every test map (usual way to check the optimiser)
@@ -61,7 +62,7 @@ Each is a folder `data/<case>/` with `map.json` and `config.toml` (settings for 
 
 - `continents`, `shuffle`: full 74×46 captures (see **capture-test-map**).
 - `<map>-revealed`: what the player had revealed at capture (43 tiles);
-  `<map>-radius6`: radius 6 around the player's start. Both keep only resources
+  `<map>-radius6` / `<map>-radius18`: radius 6 / 18 around the player's start. Both keep only resources
   visible at capture. Their `scenario.source` names the full map, so the viewer can
   show the hidden tiles faded.
 - Cut new ones with `make-map` (writes `data/<name>/map.json` and an empty `config.toml`) (`--at-player` centres on the middle of the revealed

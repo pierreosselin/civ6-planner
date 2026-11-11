@@ -17,13 +17,22 @@ def _resource_classes():
         return {}
 
 
+_KEEP = {"i", "x", "y", "terrain", "owner"}
+
+
+def _slim(t: dict) -> dict:
+    """A tile with only what the page uses: no neighbour list, no empty fields (zero,
+    false, NONE, -1; the page treats a missing field the same). Halves the page."""
+    return {k: v for k, v in t.items() if k in _KEEP or (k != "neighbours" and v not in (0, False, "NONE", -1, None))}
+
+
 def write(d, path, title="", tacks=(), notes=(), hidden_from=None):
     """Write the page for dump `d`. hidden_from: the unmasked map, if d is masked."""
     shown = {t["i"] for t in d["tiles"]}
     hidden = [t for t in hidden_from["tiles"] if t["i"] not in shown] if hidden_from else []
     data = {
         "w": d["w"], "h": d["h"], "turn": d["turn"],
-        "tiles": d["tiles"], "hidden": hidden,
+        "tiles": [_slim(t) for t in d["tiles"]], "hidden": [_slim(t) for t in hidden],
         "tacks": [{"x": t.x, "y": t.y, "icon": t.icon, "name": t.name, "yields": getattr(t, "yields", {})} for t in tacks],
         "resourceClass": _resource_classes(),
     }
@@ -191,7 +200,7 @@ function drawLabels(t) {
   });
 }
 
-D.hidden.forEach(t => drawTile(t, hiddenLayer, true));
+let hiddenDrawn = false;   // drawn on first use: on a masked map it's most of the tiles
 D.tiles.forEach(t => drawTile(t, tileLayer, true));
 D.tiles.forEach(t => drawRivers(t, riverLayer));
 D.tiles.forEach(drawLabels);
@@ -241,7 +250,10 @@ document.getElementById("legend").innerHTML = legend.map(([n, c]) => `<span><spa
   + `<span style="grid-column:1/-1">yields: ` + YIELDS.map(([k, l, f, ink]) =>
       `<span class="sw" style="background:${f};width:auto;padding:0 3px;color:${ink};font-size:10px;font-weight:700;height:auto">${l}</span>${nice(k.replace("YIELD_", "RESOURCE_"))} `).join("") + `</span>`;
 if (!D.hidden.length) document.getElementById("showHidden").parentElement.style.display = "none";
-document.getElementById("showHidden").onchange = e => hiddenLayer.setAttribute("display", e.target.checked ? "inline" : "none");
+document.getElementById("showHidden").onchange = e => {
+  if (e.target.checked && !hiddenDrawn) { D.hidden.forEach(t => drawTile(t, hiddenLayer, true)); hiddenDrawn = true; }
+  hiddenLayer.setAttribute("display", e.target.checked ? "inline" : "none");
+};
 document.getElementById("showRes").onchange = e => labelLayer.setAttribute("display", e.target.checked ? "inline" : "none");
 document.getElementById("showYields").onchange = e => yieldLayer.setAttribute("display", e.target.checked ? "inline" : "none");
 document.getElementById("showCoords").onchange = e => coordLayer.setAttribute("display", e.target.checked ? "inline" : "none");
@@ -253,6 +265,7 @@ let vb = pts.length ? (() => {
   return [Math.min(...xs) - 2 * R, Math.min(...ys) - 2 * R, Math.max(...xs) - Math.min(...xs) + 4 * R, Math.max(...ys) - Math.min(...ys) + 4 * R];
 })() : [0, 0, D.w * SQ3 * R, D.h * 1.5 * R];
 const apply = () => svg.setAttribute("viewBox", vb.map(v => v.toFixed(1)).join(" "));
+const FULL_W = D.w * SQ3 * R * 1.5;  // zoomed out at most to 1.5 map widths, in at most to 3 tiles
 apply();
 const tackList = document.getElementById("tackList");
 if (D.tacks.length) tackList.innerHTML = "<b>Tacks</b> <span class=muted>(click to zoom)</span>";
@@ -267,7 +280,11 @@ D.tacks.forEach(k => {
 });
 svg.addEventListener("wheel", e => {
   e.preventDefault();
-  const s = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+  // Zoom by how far the wheel or touchpad moved (lines and pages turned into pixels),
+  // not a fixed step per event, so a touchpad flick doesn't zoom all the way.
+  const px = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+  let s = Math.exp(Math.max(-100, Math.min(100, px)) * 0.002);
+  s = Math.max(3 * SQ3 * R / vb[2], Math.min(FULL_W / vb[2], s));
   const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY;
   const m = p.matrixTransform(svg.getScreenCTM().inverse());  // mouse in map units
   vb = [m.x - (m.x - vb[0]) * s, m.y - (m.y - vb[1]) * s, vb[2] * s, vb[3] * s];
