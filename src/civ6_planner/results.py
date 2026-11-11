@@ -92,7 +92,7 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         sc_dir = os.path.join(out_dir, name)
         os.makedirs(sc_dir, exist_ok=True)
         viewer.write(d, os.path.join(sc_dir, "map.html"), title=name, tacks=planned,
-                     notes=notes, hidden_from=original)
+                     hidden_from=original)
         record = {"name": name, "description": describe(d), "tiles": len(gmap),
                   "score": round(score, 2), "score_parts": parts,
                   "config": {"files": cfg.sources, **cfg.raw}, "solver": p.info,
@@ -162,7 +162,7 @@ def _where(sc_dir: str) -> list[str]:
     """Where to look at the map with its tacks."""
     page = os.path.join(sc_dir, "map.html")
     rel = os.path.relpath(page, paths.REPO_ROOT)
-    out = ["Map with the tacks (every placement is listed in its side panel and in decisions.json):",
+    out = ["Map with the tacks (every placement is listed in decisions.json and index.html):",
            f"  {page}", f"  xdg-open {page}"]
     if not rel.startswith(".."):
         out.append(f"  Live Server: http://127.0.0.1:5500/{rel}")

@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How a MIP solver works</title>
+<style>
+  :root { --bg:#f7f6f2; --panel:#ffffff; --ink:#1f1e1b; --muted:#6b6963; --line:#dddbd3; --accent:#2f5fb3; --note:#fbf3dc;
+          --region:rgba(47,95,179,.16); --region2:rgba(47,95,179,.06); --sol:#2f8a4e; --bound:#b5482f; --cut:#c07a12; --chop:rgba(192,122,18,.28); }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#1a1a19; --panel:#242422; --ink:#f0efec; --muted:#a3a29b; --line:#3a3a37; --accent:#8fb0ec; --note:#3a3322;
+          --region:rgba(143,176,236,.22); --region2:rgba(143,176,236,.07); --sol:#6cc68a; --bound:#e58a72; --cut:#e6a84a; --chop:rgba(230,168,74,.3); }
+  }
+  :root[data-theme="dark"] { --bg:#1a1a19; --panel:#242422; --ink:#f0efec; --muted:#a3a29b; --line:#3a3a37; --accent:#8fb0ec; --note:#3a3322;
+          --region:rgba(143,176,236,.22); --region2:rgba(143,176,236,.07); --sol:#6cc68a; --bound:#e58a72; --cut:#e6a84a; --chop:rgba(230,168,74,.3); }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:32px 16px 64px; font:16px/1.6 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:900px; margin:0 auto; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:19px; margin:44px 0 8px; padding-top:12px; border-top:1px solid var(--line); }
+  h3 { font-size:16px; margin:24px 0 6px; }
+  .muted { color:var(--muted); font-size:14px; }
+  code { font:13.5px ui-monospace, monospace; background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:0 4px; }
+  pre { font:12.5px/1.45 ui-monospace, monospace; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 14px; overflow-x:auto; margin:10px 0; }
+  .math { font:15px/1.7 ui-monospace, monospace; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 16px; margin:10px 0; overflow-x:auto; white-space:pre; }
+  .note { background:var(--note); border-radius:8px; padding:10px 14px; margin:12px 0; font-size:15px; }
+  table { border-collapse:collapse; width:100%; font-size:14.5px; margin:8px 0; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:13px; }
+  ul, ol { padding-left:22px; }
+  nav ol { columns:2; font-size:14.5px; margin:8px 0; }
+  .fig { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin:14px 0; }
+  .fig svg { width:100%; height:auto; display:block; }
+  .cap { font-size:14px; color:var(--muted); margin-top:6px; }
+  .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  button { font:inherit; font-size:14px; padding:5px 12px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink); cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.4; cursor:default; }
+  .stepinfo { font-size:14.5px; min-height:3.2em; margin-top:8px; }
+  .kv { font-variant-numeric:tabular-nums; }
+  @media (max-width:600px) { nav ol { columns:1; } }
+</style></head>
+<body><main>
+
+<h1>How a MIP solver works</h1>
+<p class="muted">What HiGHS does between "Presolving model" and "Solving report", taught on a two-variable example
+you can see whole, then tied back to our planner and its log. Companion to
+<a href="solver-log.html">Reading the solver log</a> and <a href="model.html">Placement model</a>.</p>
+
+<nav><ol>
+  <li><a href="#problem">The problem HiGHS solves</a></li>
+  <li><a href="#lp">The LP relaxation</a></li>
+  <li><a href="#simplex">The simplex method</a></li>
+  <li><a href="#duality">Duality: where the bound comes from</a></li>
+  <li><a href="#bnb">Branch and bound (step through it)</a></li>
+  <li><a href="#cuts">Cutting planes</a></li>
+  <li><a href="#clique">Clique cuts and our city spacing</a></li>
+  <li><a href="#presolve">Presolve</a></li>
+  <li><a href="#heur">Primal heuristics</a></li>
+  <li><a href="#choices">Branching, node choice, conflicts</a></li>
+  <li><a href="#formulation">Strong vs weak formulations</a></li>
+  <li><a href="#ourlog">Back to our log</a></li>
+</ol></nav>
+
+<!-- ============================================================ -->
+<h2 id="problem">1. The problem HiGHS solves</h2>
+<p>A <b>mixed-integer linear programme</b> (MIP): a linear objective, linear constraints, and some variables that must
+be integers.</p>
+<div class="math">maximise    c·x
+subject to  A x ≤ b
+            l ≤ x ≤ u
+            x_j integer for j in J</div>
+<p>In our planner almost every variable is <b>binary</b> (0/1): "found a city on site c", "put a Campus on tile t for
+city c", "build a Mine here". The constraints say what can't happen together: two cities too close, two things on
+one tile, more than 3 specialty districts. The objective adds up yields.</p>
+<p>Without the "integer" line this would be a <b>linear programme</b> (LP), and LPs are easy: solvable in polynomial
+time, and in practice in seconds even with millions of variables. The integrality requirement makes the problem
+NP-hard. Everything a MIP solver does is a way of <b>using easy LPs to solve the hard MIP</b>.</p>
+
+<p>Running example, small enough to draw:</p>
+<div class="math">maximise    z = 5x + 4y
+subject to  6x + 4y ≤ 24        (constraint 1)
+             x + 2y ≤ 6         (constraint 2)
+            x, y ≥ 0, integer</div>
+
+<!-- ============================================================ -->
+<h2 id="lp">2. The LP relaxation</h2>
+<p>Drop "integer" and you get the <b>LP relaxation</b>. Its feasible set is a <b>polytope</b>: the shaded polygon
+below, bounded by one straight line per constraint. The integer solutions are the dots inside it.</p>
+
+<div class="fig"><svg id="figLP" viewBox="0 0 640 340" role="img" aria-label="Feasible polygon of the example with integer points and the LP optimum at (3, 1.5)"></svg>
+<div class="cap">Shaded: LP feasible region. Filled dots: integer points that satisfy both constraints. Dashed lines:
+objective contours 5x + 4y = const (higher towards the top right). The LP optimum is the corner the contours touch
+last: (3, 1.5) with z = 21. The best integer point is (4, 0) with z = 20.</div></div>
+
+<p>Three facts make the relaxation the solver's main tool:</p>
+<ol>
+  <li><b>It's a bound.</b> The relaxation allows everything the MIP allows and more, so its optimum (21) is at least
+    as good as the MIP's (20). No integer plan can be worth more than 21. That's the <code>BestBound</code> column.</li>
+  <li><b>If the LP optimum happens to be integer, it's the MIP optimum.</b> Nothing better exists, because the bound
+    is achieved.</li>
+  <li><b>An LP optimum is always at a corner</b> (vertex) of the polytope. A corner sits where some constraints are
+    tight, and these are often at fractional values. That's why the LP answer is "3 and a half".</li>
+</ol>
+<p>The difference between the LP value and the MIP value (21 vs 20 here) is the <b>integrality gap</b> of the
+formulation. A small gap makes the MIP easy; a big one makes it hard. Most of what follows is about shrinking that
+gap.</p>
+
+<!-- ============================================================ -->
+<h2 id="simplex">3. The simplex method</h2>
+<p>The simplex method solves an LP by walking from corner to corner of the polytope along its edges, each step
+improving the objective, until no neighbouring corner is better.</p>
+
+<div class="fig"><svg id="figSimplex" viewBox="0 0 640 340" role="img" aria-label="Simplex path from (0,0) to (4,0) to (3,1.5)"></svg>
+<div class="cap">Start at (0, 0), z = 0. Increasing x pays most (5 per unit), so walk right until a constraint stops
+you: constraint 1 at x = 4, z = 20. Now increasing y along constraint 1 still pays (+⅔ per unit of y), so walk up the
+edge until constraint 2 stops you: (3, 1.5), z = 21. No neighbouring corner improves z: optimal. Two steps =
+<b>two simplex iterations (pivots)</b>.</div></div>
+
+<ul>
+  <li><b>LpIters</b> in the HiGHS table counts these pivots. In our shuffle-radius18 log the root LP took 19,301 of
+    them: the polytope has 60,146 dimensions instead of 2, but the idea is the same.</li>
+  <li>Each pivot is a linear-algebra update on a sparse matrix. Its cost grows with the matrix's <b>nonzeros</b>,
+    which is why the log reports that count.</li>
+  <li><b>Dual simplex.</b> HiGHS mostly uses the dual simplex variant. Its strength is <b>warm starting</b>: when
+    branch and bound adds a bound like <i>y ≤ 1</i> or a cut, the old optimal corner becomes infeasible, but it's
+    still a very good starting point. The dual simplex repairs it in a few pivots instead of solving from
+    scratch. That's what makes evaluating thousands of nodes affordable.</li>
+  <li>HiGHS also has an interior-point method (IPM), which crosses the inside of the polytope instead of walking
+    its edges. It's sometimes faster for a single big LP, but harder to warm start.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="duality">4. Duality: where the bound comes from</h2>
+<p>Why can the solver claim "no plan beats 21" without trying them all? Because the constraints can be combined
+into a proof.</p>
+<p>Multiply constraint 1 by ¾ and constraint 2 by ½, and add them:</p>
+<div class="math">  ¾ (6x + 4y) ≤ ¾ · 24     →   4.5x + 3y ≤ 18
++ ½ ( x + 2y) ≤ ½ · 6      →   0.5x +  y ≤  3
+  ───────────────────────────────────────────
+                               5x + 4y ≤ 21</div>
+<p>The left side is <i>exactly</i> the objective. So for every feasible point, integer or not,
+<b>z ≤ 21</b>. The multipliers (¾, ½) are the <b>dual solution</b>, and 21 is the <b>dual bound</b>. Finding the
+best multipliers is itself an LP (the dual LP), and its optimum always equals the primal LP's optimum: strong
+duality. The simplex method produces both at once.</p>
+<p>So in the log:</p>
+<ul>
+  <li><b>Primal bound</b> = <code>BestSol</code> = value of a real plan you have in hand (a lower bound on the optimum when maximising).</li>
+  <li><b>Dual bound</b> = <code>BestBound</code> = value certified by multipliers like these, over all the open
+    branch-and-bound nodes (an upper bound on the optimum).</li>
+  <li>The multipliers also have an economic reading: ¾ is the value of one more unit of constraint 1's right-hand
+    side. These are the <b>shadow prices</b>, or <b>reduced costs</b> for variable bounds. HiGHS uses reduced costs
+    to fix variables: if setting a binary to 1 would cost more than the current gap, it can never be in a better
+    plan, so it's fixed to 0 ("reduced-cost fixing").</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="bnb">5. Branch and bound</h2>
+<p>The LP gave (3, 1.5). y = 1.5 isn't allowed, and every integer solution has either y ≤ 1 or y ≥ 2. So
+<b>split the problem in two</b> (branch) and solve the LP of each half. Each half's LP value bounds everything in that
+half, so halves whose bound can't beat the best plan found so far are thrown away (bound, or "pruned").</p>
+
+<div class="fig">
+  <svg id="figBnB" viewBox="0 0 780 340" role="img" aria-label="Branch and bound step by step: feasible region of the current node and the search tree"></svg>
+  <div class="controls">
+    <button id="bnbPrev">◀ Back</button>
+    <button id="bnbNext">Next ▶</button>
+    <span class="muted kv" id="bnbCounter"></span>
+  </div>
+  <div class="stepinfo" id="bnbInfo"></div>
+</div>
+
+<p>Things to notice:</p>
+<ul>
+  <li><b>Global bound</b> = the best LP value among the <i>open</i> nodes. It only falls as nodes are solved or
+    closed. <b>Incumbent</b> = the best integer plan found. The solver stops when they meet (gap 0) or a limit is
+    hit.</li>
+  <li>A node closes for one of three reasons: its LP is <b>infeasible</b>; its LP solution is <b>integer</b> (a new
+    plan, no need to split further); or its <b>bound is no better than the incumbent</b>.</li>
+  <li>Finding a good incumbent early is valuable: it lets whole subtrees be pruned without ever being explored. That's
+    the job of the heuristics (section 9).</li>
+  <li>With n binaries the full tree has 2ⁿ leaves. For us, 2<sup>52,327</sup>. The solver only gets through it
+    because bounds prune almost everything. The tighter the LP bound, the more gets pruned.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="cuts">6. Cutting planes</h2>
+<p>Branching splits the problem. A <b>cut</b> instead adds a new constraint that every integer solution satisfies
+but the current fractional LP solution violates. It slices off a piece of the polytope that contains no integer
+points.</p>
+<p>A classic way to make one is the <b>Chvátal–Gomory</b> rounding. Take ⅛ of constraint 1 and ¼ of constraint 2:</p>
+<div class="math">⅛ (6x + 4y ≤ 24) + ¼ (x + 2y ≤ 6)   →   x + y ≤ 4.5</div>
+<p>x and y are integers, so x + y is an integer, and an integer ≤ 4.5 is ≤ 4. So <b>x + y ≤ 4</b> holds for every
+integer solution. The LP point (3, 1.5) has x + y = 4.5, so it's cut off.</p>
+
+<div class="fig"><svg id="figCut" viewBox="0 0 640 340" role="img" aria-label="The cut x + y ≤ 4 removes a triangle with no integer points; the new LP optimum is (4, 0)"></svg>
+<div class="cap">Orange triangle: the part of the polytope the cut x + y ≤ 4 removes. It has no integer points inside.
+After the cut, the LP optimum is the corner (4, 0), z = 20, which is integer: <b>one cut solved the problem with no
+branching at all</b>.</div></div>
+
+<p>Real solvers generate many families of cuts. Those HiGHS uses, and where they matter for us:</p>
+<table>
+  <tr><th>Cut family</th><th>Idea</th><th>In our model</th></tr>
+  <tr><td>Gomory / MIR (mixed-integer rounding)</td><td>Round a combination of rows read off the simplex tableau, as
+    above. Generic; works on anything.</td><td>Everywhere.</td></tr>
+  <tr><td>Clique</td><td>If binaries are pairwise incompatible, at most one of the whole group can be 1.</td><td>City
+    spacing, "one thing per tile". See the next section.</td></tr>
+  <tr><td>Knapsack cover</td><td>For Σ aᵢxᵢ ≤ b with binaries: any set of items that can't all fit gives "at
+    least one of them is 0".</td><td><code>specialty_limit</code> (at most 3), <code>improvement_limit</code>.</td></tr>
+  <tr><td>Implied bound</td><td>"x = 0 forces y = 0", written as y ≤ x.</td><td>District needs its city.</td></tr>
+</table>
+<ul>
+  <li><b>Cuts</b> in the log = how many were generated; <b>InLp</b> = how many are currently kept in the LP. Cuts that
+    stop being useful are dropped, because every row kept makes each simplex pivot more expensive.</li>
+  <li>Cut rounds are what HiGHS was doing from 10.5 s to 27.1 s in our log: 5,277 cuts moved the bound from 8,945 to
+    8,920. Useful but slow, because each round re-solves a 22,000-row LP.</li>
+  <li>The method that combines cuts and branching, which every modern solver uses, is called <b>branch and cut</b>.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="clique">7. Clique cuts and our city spacing</h2>
+<p>Cities must be more than 3 tiles apart. Take three candidate sites A, B, C that are all within 3 of each other.
+Written pairwise, as our model first did:</p>
+<div class="math">x_A + x_B ≤ 1     x_B + x_C ≤ 1     x_A + x_C ≤ 1</div>
+
+<div class="fig"><svg id="figClique" viewBox="0 0 640 230" role="img" aria-label="Three city sites pairwise too close; pairwise constraints allow 0.5 each, the clique constraint allows total 1"></svg>
+<div class="cap">Left: the conflict graph. An edge means "too close to both be cities". Right: what the LP can do.
+With pairwise rows it sets every site to ½ and collects 1.5 cities' worth of value from a spot where only one city
+fits. The clique row x_A + x_B + x_C ≤ 1 forbids that.</div></div>
+
+<p>The LP relaxation with pairwise rows is <b>weak</b>: across a map with hundreds of overlapping sites, it fills the
+whole map with half-cities and reports a bound far above any real plan. Branch and bound then has to prove it
+wrong one node at a time. Writing the spacing as <b>clique constraints</b> (one row per maximal group of mutually
+conflicting sites) makes the LP bound much closer to the truth. HiGHS can find some of these cliques itself (clique
+cuts), but not reliably on 300+ sites. CLAUDE.md records the result: that change is what made the full maps
+solvable to optimality.</p>
+
+<!-- ============================================================ -->
+<h2 id="presolve">8. Presolve</h2>
+<p>Before any LP, the solver simplifies the model. It's cheap and often the most effective single step. Typical
+reductions, with examples:</p>
+<table>
+  <tr><th>Reduction</th><th>Example</th></tr>
+  <tr><td>Remove redundant rows</td><td>x + y ≤ 5 when x, y are binary: it can never bind. Drop it.</td></tr>
+  <tr><td>Remove dominated rows</td><td>x_A + x_B ≤ 1 when x_A + x_B + x_C ≤ 1 is also present: the clique implies the
+    pair. Drop the pair.</td></tr>
+  <tr><td>Fix variables</td><td>A district whose objective coefficient is negative and that appears only in ≤ rows
+    can be fixed to 0: building it never helps.</td></tr>
+  <tr><td>Tighten coefficients</td><td>3x + y ≤ 3 with binaries is equivalent to the tighter x + y ≤ 1. Same
+    integer points, smaller LP polytope.</td></tr>
+  <tr><td>Probing</td><td>Try x = 1 tentatively: if that forces a contradiction, fix x = 0. If it forces y = 1, record
+    the implication.</td></tr>
+  <tr><td>Detect implied integers</td><td>A continuous variable that must be integer whenever the others are (our
+    <code>q</code> variables: "1267 implied int." in the log).</td></tr>
+</table>
+<p>In the shuffle-radius18 log presolve removed <b>28,710 of 51,386 rows</b>. Rows that presolve always throws away
+are a hint that the model generates redundant constraints. Not generating them saves model-building time in
+Python and memory.</p>
+
+<!-- ============================================================ -->
+<h2 id="heur">9. Primal heuristics</h2>
+<p>Branch and bound alone may take a long time to stumble on a good integer plan. <b>Primal heuristics</b> try to
+construct one quickly, from the LP solution or from scratch. Each has a letter in the log's <b>Src</b> column:</p>
+<table>
+  <tr><th>Src</th><th>Heuristic</th><th>How it works</th></tr>
+  <tr><td>J</td><td>Feasibility jump</td><td>Local search with no LP: start from all zeros and flip variables to reduce
+    constraint violations. Fast and crude. Our log's first plan (worth 207) at 3.2 s.</td></tr>
+  <tr><td>R, C, Z</td><td>Rounding (randomised, central, ZI)</td><td>Round the fractional LP solution to integers,
+    repairing violations. Our 5,474 and 7,161 plans.</td></tr>
+  <tr><td>F</td><td>Feasibility pump</td><td>Alternate between "round the LP point" and "find the LP point closest to
+    that rounding" until they agree.</td></tr>
+  <tr><td>L</td><td>Sub-MIP (RINS, RENS)</td><td>Fix every variable on which the LP solution and the incumbent agree,
+    and solve the much smaller MIP that remains, as a mini branch and bound. Expensive but strong. Our 8,810.25 plan
+    at 43.9 s, which closed the gap from 24.6% to 1.25%.</td></tr>
+  <tr><td>X</td><td>User solution</td><td>A starting plan supplied by the user (a "MIP start"). <code>scipy.optimize.milp</code>
+    can't pass one; <code>highspy</code> can. A greedy plan as MIP start would give HiGHS a good incumbent at 0 s.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="choices">10. Branching, node choice, conflicts</h2>
+<ul>
+  <li><b>Which variable to branch on?</b> The best choice is the one whose two children have the lowest LP values,
+    because that moves the bound most. <i>Strong branching</i> tries candidates' children LPs for real (accurate,
+    expensive). <i>Pseudocosts</i> remember how much the bound moved last time each variable was branched on (cheap
+    estimates). HiGHS mixes the two (reliability branching): strong branching until a variable's pseudocost is
+    trusted. "strong br." in the report counts LP iterations spent on it.</li>
+  <li><b>Which open node to solve next?</b> The node with the best bound improves the global bound fastest. Diving
+    depth-first finds integer plans fastest. Solvers alternate. <b>InQueue</b> is the number of open nodes;
+    <b>Expl.</b> is the explored share of the tree.</li>
+  <li><b>Conflict analysis</b>: when a node turns out infeasible, find which few branching decisions caused it and
+    add a constraint forbidding that combination everywhere (as SAT solvers learn clauses). That's the
+    <b>Confl.</b> column.</li>
+  <li><b>Symmetry</b>: if two variables are interchangeable (e.g. identical candidate sites), the tree contains the
+    same solutions many times, and bounds can't prune the copies. Our model has little symmetry because every tile
+    has its own yields.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="formulation">11. Strong vs weak formulations</h2>
+<p>The same set of integer plans can be written with different constraints. They give the same MIP but different
+LP relaxations. A <b>strong</b> (tight) formulation has an LP polytope close to the convex hull of the integer points:
+small integrality gap, fast solve. The convex hull itself would be perfect (LP = MIP), but it usually needs far too
+many constraints.</p>
+<table>
+  <tr><th>Pattern</th><th>Weak</th><th>Strong</th></tr>
+  <tr><td>Mutual exclusion</td><td>Pairwise x_i + x_j ≤ 1</td><td>Clique Σ x_i ≤ 1 (section 7)</td></tr>
+  <tr><td>"District needs its city"</td><td>Σ_d z_d ≤ M · x (one row, big M)</td><td>z_d ≤ x for each d
+    (more rows, but at x = ½ each z is capped at ½, not at M/2). Ours, <code>district_needs_city</code>:
+    Σ_t z[d,c,t] ≤ x[c] for each district type d, also the strong form.</td></tr>
+  <tr><td>Bonus for two things together (y = a·b)</td><td>y ≤ a, y ≤ b only</td><td>The same here, because the
+    objective rewards y. With a ≥ ½, b ≥ ½ the LP still collects y = ½ of the bonus: inherent to products, one reason
+    cross-city adjacency made HiGHS slow.</td></tr>
+  <tr><td>Big-M "if x then constraint"</td><td>Huge M (1e6)</td><td>Smallest valid M, or split into simpler
+    rows. Our coefficient range 1–300 shows we have no big-Ms.</td></tr>
+</table>
+<div class="note">Practical rule: when a model gets slow, first look at its LP bound against the best plan (the root
+gap). A big root gap means the formulation is weak, and better constraints usually help more than more time or a
+faster solver.</div>
+
+<!-- ============================================================ -->
+<h2 id="ourlog">12. Back to our log</h2>
+<p>With all of that, the shuffle-radius18 run reads like this:</p>
+<table>
+  <tr><th>Log</th><th>What the solver was doing</th></tr>
+  <tr><td>Presolve 51,386 → 22,676 rows</td><td>Dropped dominated and redundant rows (section 8).</td></tr>
+  <tr><td>J at 3.2 s, BestBound -inf</td><td>Feasibility jump made a trivial plan before any LP was solved
+    (section 9).</td></tr>
+  <tr><td>R at 6.3 s, 19,301 LpIters, bound 8,961.9</td><td>Root LP solved by dual simplex (section 3). Its value is the
+    first dual bound (section 4).</td></tr>
+  <tr><td>10.5–27.1 s, Cuts 2,219 → 5,277</td><td>Cut rounds at the root (section 6). The bound improves by only 0.5%
+    of its value; most of the gap was on the incumbent side.</td></tr>
+  <tr><td>L at 43.9 s, BestSol 8,810.25</td><td>Sub-MIP heuristic: fixed what the LP and the incumbent agreed on,
+    solved the rest (section 9).</td></tr>
+  <tr><td>Nodes 0, strong br. 0</td><td>Never branched (section 5). The whole budget went into the root.</td></tr>
+  <tr><td>Gap 1.24% at the limit</td><td>Bound 8,919.6 vs plan 8,810.25. The root LP bound is already within ~1.7% of
+    the plan: the formulation is fairly strong; the time went on finding the plan and on cut rounds over a big
+    LP.</td></tr>
+</table>
+<p>Levers, roughly in order of payoff:</p>
+<ol>
+  <li><b>Fewer columns</b>: 50,143 district options are 83% of the model. Pruning options that can't be worth building
+    shrinks every LP.</li>
+  <li><b>A MIP start</b> (section 9): the greedy plan or a previous run's plan, via <code>highspy</code>, so pruning
+    starts immediately.</li>
+  <li><b>A gap tolerance</b> of 1–2% on big maps: this run would have stopped at 43.9 s with the same plan.</li>
+  <li><b>Fewer generated rows</b>: if presolve always removes a family, don't build it.</li>
+  <li><b>Another solver</b> (CP-SAT, SCIP) to compare. Multi-threaded heuristics could find the 8,810 plan
+    sooner.</li>
+</ol>
+
+</main>
+<script>
+(() => {
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (svg, n, a, txt) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); if (txt !== undefined) e.textContent = txt; svg.appendChild(e); return e; };
+  // Keep a*x + b*y <= c (Sutherland–Hodgman on a convex polygon)
+  const clip = (poly, [a, b, c]) => {
+    const out = [], f = p => a * p[0] + b * p[1] - c;
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length], fp = f(p), fq = f(q);
+      if (fp <= 1e-9) out.push(p);
+      if ((fp < -1e-9 && fq > 1e-9) || (fp > 1e-9 && fq < -1e-9)) { const t = fp / (fp - fq); out.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]); }
+    }
+    return out;
+  };
+  const BASE = [[6, 4, 24], [1, 2, 6], [-1, 0, 0], [0, -1, 0]];
+  const feasible = (x, y, rows) => rows.every(([a, b, c]) => a * x + b * y <= c + 1e-9);
+  const region = rows => rows.reduce(clip, [[-1, -1], [9, -1], [9, 9], [-1, 9]]);
+
+  // A coordinate frame inside an svg: plot area at (ox, oy) of size w×h, domain x∈[0,5.5], y∈[0,3.6]
+  function frame(svg, ox, oy, w, h) {
+    const xmax = 5.5, ymax = 3.6;
+    const X = x => ox + 34 + x / xmax * (w - 44), Y = y => oy + h - 30 - y / ymax * (h - 44);
+    const g = {X, Y, svg};
+    for (let i = 0; i <= 5; i++) {
+      mk(svg, 'line', {x1: X(i), x2: X(i), y1: Y(0), y2: Y(ymax), stroke: 'var(--line)'});
+      mk(svg, 'text', {x: X(i), y: Y(0) + 17, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--muted)'}, i);
+    }
+    for (let j = 0; j <= 3; j++) {
+      mk(svg, 'line', {x1: X(0), x2: X(xmax), y1: Y(j), y2: Y(j), stroke: 'var(--line)'});
+      mk(svg, 'text', {x: X(0) - 9, y: Y(j) + 4, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--muted)'}, j);
+    }
+    mk(svg, 'text', {x: X(xmax), y: Y(0) + 17, 'text-anchor': 'end', 'font-size': 13, fill: 'var(--muted)'}, 'x');
+    mk(svg, 'text', {x: X(0) + 6, y: Y(ymax) + 12, 'font-size': 13, fill: 'var(--muted)'}, 'y');
+    g.poly = (pts, fill, stroke) => mk(svg, 'polygon', {points: pts.map(p => X(p[0]) + ',' + Y(p[1])).join(' '), fill, stroke: stroke || 'none', 'stroke-width': 1.5});
+    g.line = ([a, b, c], color, dash, label, lpos) => { // the line a x + b y = c, clipped to the domain
+      const seg = clip(clip(clip(clip([[-0.0, -0.0], [xmax, 0], [xmax, ymax], [0, ymax]], [a, b, c + 1e-6]), [-a, -b, -c + 1e-6]), [1, 0, xmax]), [0, 1, ymax]);
+      if (seg.length < 2) return;
+      let p = seg[0], q = seg[0], best = -1;
+      for (const s of seg) for (const t of seg) { const d = (s[0] - t[0]) ** 2 + (s[1] - t[1]) ** 2; if (d > best) { best = d; p = s; q = t; } }
+      mk(svg, 'line', {x1: X(p[0]), y1: Y(p[1]), x2: X(q[0]), y2: Y(q[1]), stroke: color, 'stroke-width': 1.8, 'stroke-dasharray': dash || ''});
+      if (label) mk(svg, 'text', {x: X(lpos[0]), y: Y(lpos[1]), 'font-size': 12.5, fill: color}, label);
+    };
+    g.dots = rows => { for (let x = 0; x <= 5; x++) for (let y = 0; y <= 3; y++) {
+      const ok = feasible(x, y, rows);
+      mk(svg, 'circle', {cx: X(x), cy: Y(y), r: 3.6, fill: ok ? 'var(--ink)' : 'none', stroke: ok ? 'none' : 'var(--muted)', 'stroke-width': 1});
+    } };
+    g.point = (x, y, color, label, dx = 8, dy = -8, anchor = 'start') => {
+      mk(svg, 'circle', {cx: X(x), cy: Y(y), r: 6.5, fill: color, stroke: 'var(--panel)', 'stroke-width': 2});
+      if (label) mk(svg, 'text', {x: X(x) + dx, y: Y(y) + dy, 'font-size': 13, 'font-weight': 600, fill: color, 'text-anchor': anchor}, label);
+    };
+    g.arrow = (p, q, color) => {
+      const [x1, y1, x2, y2] = [X(p[0]), Y(p[1]), X(q[0]), Y(q[1])], a = Math.atan2(y2 - y1, x2 - x1), L = 10;
+      mk(svg, 'line', {x1, y1, x2: x2 - 7 * Math.cos(a), y2: y2 - 7 * Math.sin(a), stroke: color, 'stroke-width': 3});
+      mk(svg, 'polygon', {points: `${x2},${y2} ${x2 - L * Math.cos(a - .4)},${y2 - L * Math.sin(a - .4)} ${x2 - L * Math.cos(a + .4)},${y2 - L * Math.sin(a + .4)}`, fill: color});
+    };
+    return g;
+  }
+  const constraintLines = g => {
+    g.line([6, 4, 24], 'var(--accent)', '', '6x+4y ≤ 24', [4.1, 1.35]);
+    g.line([1, 2, 6], 'var(--accent)', '', 'x+2y ≤ 6', [0.25, 3.2]);
+  };
+
+  // Figure: LP relaxation
+  { const svg = document.getElementById('figLP'), g = frame(svg, 0, 0, 640, 340);
+    g.poly(region(BASE), 'var(--region)');
+    for (const z of [10, 15, 21]) g.line([5, 4, z], 'var(--muted)', '4 4', 'z = ' + z, [(z - 4 * 0.55) / 5 + 0.08, 0.55]);
+    constraintLines(g); g.dots(BASE);
+    g.point(3, 1.5, 'var(--bound)', 'LP optimum (3, 1.5), z = 21');
+    g.point(4, 0, 'var(--sol)', 'best integer (4, 0), z = 20', 8, -10);
+  }
+  // Figure: simplex path
+  { const svg = document.getElementById('figSimplex'), g = frame(svg, 0, 0, 640, 340);
+    g.poly(region(BASE), 'var(--region)'); constraintLines(g); g.dots(BASE);
+    g.arrow([0, 0], [4, 0], 'var(--cut)'); g.arrow([4, 0], [3, 1.5], 'var(--cut)');
+    g.point(0, 0, 'var(--muted)', 'start z = 0', 8, -10);
+    g.point(4, 0, 'var(--cut)', 'pivot 1: z = 20', 10, -10);
+    g.point(3, 1.5, 'var(--bound)', 'pivot 2: z = 21, optimal');
+  }
+  // Figure: cut
+  { const svg = document.getElementById('figCut'), g = frame(svg, 0, 0, 640, 340);
+    const cutRows = [...BASE, [1, 1, 4]];
+    g.poly(region(BASE), 'var(--region2)');
+    g.poly([[4, 0], [3, 1.5], [2, 2]], 'var(--chop)');
+    g.poly(region(cutRows), 'var(--region)');
+    constraintLines(g);
+    g.line([1, 1, 4], 'var(--cut)', '6 4', 'cut x + y ≤ 4', [1.0, 3.25]);
+    g.dots(cutRows);
+    g.point(3, 1.5, 'var(--muted)', 'old LP optimum, cut off');
+    g.point(4, 0, 'var(--sol)', 'new LP optimum (4, 0), z = 20: integer', -8, -12, 'end');
+  }
+  // Figure: clique
+  { const svg = document.getElementById('figClique');
+    const P = {A: [90, 50], B: [40, 170], C: [170, 170]};
+    for (const [u, v] of [['A', 'B'], ['B', 'C'], ['A', 'C']]) mk(svg, 'line', {x1: P[u][0], y1: P[u][1], x2: P[v][0], y2: P[v][1], stroke: 'var(--bound)', 'stroke-width': 2});
+    mk(svg, 'text', {x: 105, y: 215, 'text-anchor': 'middle', 'font-size': 12.5, fill: 'var(--muted)'}, 'edge = closer than 4 tiles');
+    for (const k in P) { mk(svg, 'circle', {cx: P[k][0], cy: P[k][1], r: 20, fill: 'var(--region)', stroke: 'var(--accent)', 'stroke-width': 2});
+      mk(svg, 'text', {x: P[k][0], y: P[k][1] + 5, 'text-anchor': 'middle', 'font-size': 15, 'font-weight': 700, fill: 'var(--ink)'}, k); }
+    const rows = [
+      ['', 'x_A', 'x_B', 'x_C', 'cities'],
+      ['pairwise LP', '½', '½', '½', '1.5 ✗'],
+      ['clique LP', '1', '0', '0', '1 ✓'],
+      ['real plans', 'one of them = 1', '', '', '≤ 1'],
+    ];
+    const cx = [250, 360, 420, 480, 560];
+    rows.forEach((r, i) => r.forEach((t, j) => mk(svg, 'text', {x: cx[j], y: 60 + i * 36, 'font-size': i === 0 ? 12.5 : 14, 'font-weight': i === 0 || j === 0 ? 600 : 400,
+      fill: i === 0 ? 'var(--muted)' : (j === 4 && i === 1 ? 'var(--bound)' : (j === 4 && i === 2 ? 'var(--sol)' : 'var(--ink)')), 'text-anchor': j === 0 ? 'start' : 'middle'}, t)));
+    mk(svg, 'line', {x1: 245, x2: 600, y1: 68, y2: 68, stroke: 'var(--line)'});
+  }
+
+  // Branch and bound stepper
+  const svg = document.getElementById('figBnB');
+  const NODES = {
+    root: {label: 'root', rows: [], lp: [3, 1.5], z: 21, pos: [610, 40]},
+    y2:   {label: 'y ≥ 2', rows: [[0, -1, -2]], lp: [2, 2], z: 18, pos: [520, 140]},
+    y1:   {label: 'y ≤ 1', rows: [[0, 1, 1]], lp: [10 / 3, 1], z: 20.67, pos: [700, 140]},
+    x4:   {label: 'x ≥ 4', rows: [[0, 1, 1], [-1, 0, -4]], lp: [4, 0], z: 20, pos: [640, 250]},
+    x3:   {label: 'x ≤ 3', rows: [[0, 1, 1], [1, 0, 3]], lp: [3, 1], z: 19, pos: [750, 250]},
+  };
+  const EDGES = [['root', 'y2'], ['root', 'y1'], ['y1', 'x4'], ['y1', 'x3']];
+  // status per step: 'open' (waiting), 'cur' (being solved), 'branched', 'int' (integer: incumbent candidate), 'pruned'
+  const STEPS = [
+    {cur: 'root', st: {root: 'cur'}, inc: null, bound: 21,
+     text: 'Solve the <b>root LP</b>: (3, 1.5), z = 21. So no plan beats 21. y is fractional, so <b>branch on y</b>: every integer plan has y ≤ 1 or y ≥ 2.'},
+    {cur: 'y2', st: {root: 'branched', y2: 'cur', y1: 'open'}, inc: 18, bound: 21,
+     text: 'Child <b>y ≥ 2</b>: only a sliver of the polytope is left. Its LP optimum (2, 2), z = 18, is integer: our <b>first incumbent, 18</b>. This node is closed. Global bound is still 21 (the y ≤ 1 node is open, with its parent\'s bound).'},
+    {cur: 'y1', st: {root: 'branched', y2: 'int', y1: 'cur'}, inc: 18, bound: 20.67,
+     text: 'Child <b>y ≤ 1</b>: LP optimum (3⅓, 1), z = 20.67. Better than 18, so it may contain a better plan, but x is fractional: <b>branch on x</b> (x ≤ 3 or x ≥ 4). Global bound falls to 20.67. Gap = (20.67 − 18) / 18 = 15%.'},
+    {cur: 'x4', st: {root: 'branched', y2: 'int', y1: 'branched', x4: 'cur', x3: 'open'}, inc: 20, bound: 20.67,
+     text: 'Node <b>y ≤ 1, x ≥ 4</b>: LP optimum (4, 0), z = 20, integer. <b>New incumbent, 20.</b> One open node remains, with bound 20.67.'},
+    {cur: 'x3', st: {root: 'branched', y2: 'int', y1: 'branched', x4: 'int', x3: 'cur'}, inc: 20, bound: 20,
+     text: 'Node <b>y ≤ 1, x ≤ 3</b>: LP optimum (3, 1), z = 19 &lt; 20. Nothing in here can beat the incumbent: <b>pruned by bound</b>. No open nodes left: bound = incumbent = 20, <b>gap 0%, optimal</b>. 5 nodes solved instead of enumerating every integer point.'},
+  ];
+  let step = 0;
+  const color = s => ({cur: 'var(--accent)', int: 'var(--sol)', pruned: 'var(--muted)', open: 'var(--muted)', branched: 'var(--ink)'}[s]);
+  function draw() {
+    svg.replaceChildren();
+    const S = STEPS[step], node = NODES[S.cur];
+    const g = frame(svg, 0, 0, 470, 340);
+    g.poly(region(BASE), 'var(--region2)');
+    g.poly(region([...BASE, ...node.rows]), 'var(--region)', 'var(--accent)');
+    constraintLines(g); g.dots(BASE);
+    if (node.rows.length) for (const r of node.rows) g.line(r, 'var(--cut)', '5 4');
+    const [lx, ly] = node.lp, isInt = Number.isInteger(lx) && Number.isInteger(ly);
+    g.point(lx, ly, isInt ? 'var(--sol)' : 'var(--bound)', `LP (${+lx.toFixed(2)}, ${ly}) z = ${node.z}`, lx > 3.2 ? -8 : 8, -12, lx > 3.2 ? 'end' : 'start');
+    // tree
+    mk(svg, 'text', {x: 490, y: 18, 'font-size': 12.5, fill: 'var(--muted)'}, 'search tree');
+    for (const [a, b] of EDGES) if (S.st[b]) mk(svg, 'line', {x1: NODES[a].pos[0], y1: NODES[a].pos[1] + 18, x2: NODES[b].pos[0], y2: NODES[b].pos[1] - 18, stroke: 'var(--line)', 'stroke-width': 2});
+    for (const k in NODES) {
+      const s = S.st[k]; if (!s) continue;
+      const [x, y] = NODES[k].pos, c = color(s);
+      const shown = s === 'cur' || s === 'int' || s === 'branched';
+      mk(svg, 'rect', {x: x - 50, y: y - 18, width: 100, height: 36, rx: 7, fill: s === 'cur' ? 'var(--region)' : 'var(--panel)', stroke: c, 'stroke-width': s === 'cur' ? 2.5 : 1.5, 'stroke-dasharray': s === 'open' ? '4 3' : ''});
+      mk(svg, 'text', {x, y: y - 3, 'text-anchor': 'middle', 'font-size': 12.5, 'font-weight': 600, fill: 'var(--ink)'}, NODES[k].label);
+      mk(svg, 'text', {x, y: y + 12, 'text-anchor': 'middle', 'font-size': 11.5, fill: c},
+        s === 'open' ? 'open' : (step === 4 && k === 'x3') ? 'z = 19 pruned' : shown ? ('z = ' + NODES[k].z + (s === 'int' ? ' integer' : '')) : '');
+    }
+    const gap = S.inc ? ((S.bound - S.inc) / S.inc * 100).toFixed(1) + '%' : '∞';
+    mk(svg, 'text', {x: 490, y: 325, 'font-size': 12.5, fill: 'var(--ink)'}, `bound ${S.bound}   incumbent ${S.inc ?? '—'}   gap ${gap}`);
+    document.getElementById('bnbInfo').innerHTML = S.text;
+    document.getElementById('bnbCounter').textContent = `step ${step + 1} of ${STEPS.length}`;
+    document.getElementById('bnbPrev').disabled = step === 0;
+    document.getElementById('bnbNext').disabled = step === STEPS.length - 1;
+  }
+  document.getElementById('bnbPrev').onclick = () => { step = Math.max(0, step - 1); draw(); };
+  document.getElementById('bnbNext').onclick = () => { step = Math.min(STEPS.length - 1, step + 1); draw(); };
+  draw();
+})();
+</script>
+</body></html>

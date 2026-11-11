@@ -109,7 +109,7 @@ uv run python -m unittest discover -s tests                       # tests
 `results` prints each run as it goes (map statistics, the model as it is built, the
 solver's log, a summary with the share of cities getting each district) and writes
 `results/<run>/`: an `index.html` linking a map page per case (pan, zoom, hover a
-tile; every tack listed in the side panel), plus `decisions.json`, `optimisation.log`
+tile or tack), plus `decisions.json`, `optimisation.log`
 and `run.log`.
 
 New test maps: in a throwaway game press Ctrl+Shift+F, save, then

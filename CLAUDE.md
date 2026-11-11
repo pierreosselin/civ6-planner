@@ -21,9 +21,12 @@ type, mean adjacency per type). Tacks are named per city
 ("City C1", "Campus C1", "Campus Rome");
 Entertainment Complex left out on purpose. Objective: site yields + district
 adjacency − covered tiles + improved tiles; food, production and science weighted 2 for now
-(food so cities grow enough for their districts). All test
-cases solve to optimal in ~67 s in total (full maps 11–32 s; city spacing written as
-clique constraints, which made that possible). Kept simple on purpose: other adjacency
+(food so cities grow enough for their districts). With 400
+city candidates the six original cases solve to optimal in ~67 s in total (full maps
+11–32 s; city spacing written as clique constraints, which made that possible). With all
+sites (the full maps' configs) and on the radius-18 maps they reach the 60 s limit: gaps
+0.016% (continents), 1.24% (shuffle-radius18), 16.5% (shuffle: one rounding plan at 11.5 s,
+then nothing; needs more time or a starting plan). Kept simple on purpose: other adjacency
 between *planned* districts ("+1 per 2 districts", across cities) isn't modelled
 yet, because general coupling constraints made HiGHS slow.
 
@@ -80,7 +83,7 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
   when founded; tiles another of your cities owns; range; shared tiles; spacing), and
   where to open the map). `run.log` in the run folder holds exactly what the
   terminal showed for the whole run. Individual placements are in `decisions.json` and
-  the map's side panel, not the log. `--planner greedy`
+  `index.html`, not the log (the map page shows only the map and its legend). `--planner greedy`
   runs the old stub for comparison.
 
 Environment: a uv virtualenv in `.venv` (git-ignored; `uv.lock` is committed). Set up

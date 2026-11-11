@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading the solver log</title>
+<style>
+  :root { --bg:#f7f6f2; --panel:#ffffff; --ink:#1f1e1b; --muted:#6b6963; --line:#dddbd3; --accent:#2f5fb3; --note:#fbf3dc; --sol:#2f8a4e; --bound:#b5482f; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#1a1a19; --panel:#242422; --ink:#f0efec; --muted:#a3a29b; --line:#3a3a37; --accent:#8fb0ec; --note:#3a3322; --sol:#6cc68a; --bound:#e58a72; }
+  }
+  :root[data-theme="dark"] { --bg:#1a1a19; --panel:#242422; --ink:#f0efec; --muted:#a3a29b; --line:#3a3a37; --accent:#8fb0ec; --note:#3a3322; --sol:#6cc68a; --bound:#e58a72; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:32px 16px 64px; font:16px/1.6 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:900px; margin:0 auto; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:19px; margin:40px 0 8px; padding-top:12px; border-top:1px solid var(--line); }
+  h3 { font-size:16px; margin:24px 0 6px; }
+  .muted { color:var(--muted); font-size:14px; }
+  code { font:13.5px ui-monospace, monospace; background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:0 4px; }
+  pre { font:12.5px/1.45 ui-monospace, monospace; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 14px; overflow-x:auto; margin:10px 0; }
+  pre mark { background:var(--note); color:inherit; border-radius:3px; padding:0 2px; }
+  .note { background:var(--note); border-radius:8px; padding:10px 14px; margin:12px 0; font-size:15px; }
+  table { border-collapse:collapse; width:100%; font-size:14.5px; margin:8px 0; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:13px; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .wrap { overflow-x:auto; }
+  ul, ol { padding-left:22px; }
+  nav ol { columns:2; font-size:14.5px; margin:8px 0; }
+  .chart { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin:12px 0; }
+  .chart svg { width:100%; height:auto; display:block; }
+  .legend { font-size:13.5px; color:var(--muted); display:flex; gap:18px; flex-wrap:wrap; margin-top:6px; }
+  .sw { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:6px; border-radius:2px; }
+  @media (max-width:600px) { nav ol { columns:1; } }
+</style></head>
+<body><main>
+
+<h1>Reading the solver log</h1>
+<p class="muted">A walk through one <code>optimisation.log</code>, line by line:
+<code>results/shuffle18/shuffle-radius18/optimisation.log</code> (shuffle map, radius 18 around the player's start,
+1,008 tiles). It's a useful example because it <b>hits the 60 s time limit</b>, so every part of the log has
+something to say.</p>
+
+<nav><ol>
+  <li><a href="#stages">The five stages</a></li>
+  <li><a href="#build">[1–3] Map, candidates, model size</a></li>
+  <li><a href="#header">[4] HiGHS header and presolve</a></li>
+  <li><a href="#table">[4] The progress table</a></li>
+  <li><a href="#chart">Bound and solution over time</a></li>
+  <li><a href="#report">[4] Solving report</a></li>
+  <li><a href="#result">[5] Result: score vs objective</a></li>
+  <li><a href="#verdict">What this run tells us</a></li>
+</ol></nav>
+<p class="muted">How the solver works underneath (LP, simplex, bounds, branch and bound, cuts, heuristics), with
+drawn examples: <a href="mip-solving.html">How a MIP solver works</a>.</p>
+
+<h2 id="stages">1. The five stages</h2>
+<table>
+  <tr><th>Stage</th><th>Written by</th><th>What it tells you</th></tr>
+  <tr><td>[1/5] Map</td><td><code>metrics.map_summary</code></td><td>What the planner sees: tiles, terrain, rivers, resources, cities, rules.</td></tr>
+  <tr><td>[2/5] Candidates</td><td><code>model.py</code></td><td>How many city sites, district and improvement options survive the filters. This mostly decides the model size.</td></tr>
+  <tr><td>[3/5] Building the model</td><td><code>model.py</code></td><td>Each variable, constraint and objective function and how much it adds.</td></tr>
+  <tr><td>[4/5] Solving</td><td>HiGHS itself</td><td>Presolve, then the branch-and-bound progress, then a report. The rest of this page is mostly about this stage.</td></tr>
+  <tr><td>[5/5] Result</td><td><code>model.evaluate</code>, <code>metrics</code>, <code>validate</code></td><td>The plan's score, district/improvement statistics, spacing and a check against rules the model leaves out.</td></tr>
+</table>
+
+<h2 id="build">2. [1–3] Map, candidates, model size</h2>
+<pre>[2/5] Candidates
+  312 city sites (best 400 by site value), 0 existing cities, up to 312 new cities
+  50,143 district options over 9 types, 1,872 improvement options (6 best per city)</pre>
+<p>Every district option is a (district type, city site, tile) triple, so it's one binary variable. 312 sites × 9 types
+× the tiles within 3 of each site gives the 50,143. That's 83% of the variables.</p>
+<pre>  constraints  not_next_to_planned_city    28,655 rows
+  constraints  neighbour_bonus_link        13,751 rows
+  objective    covered_tile_term           44,763 coefficients
+  60,146 variables (52,327 integer), 51,386 rows   1.1 s</pre>
+<p>The final line is the size that HiGHS receives: 60,146 columns (variables) and 51,386 rows (constraints). The two
+biggest constraint families are worth watching. Presolve throws away more than half of the rows (next section), so
+<code>not_next_to_planned_city</code> is probably mostly redundant.</p>
+
+<h2 id="header">3. [4] HiGHS header and presolve</h2>
+<pre>[4/5] Solving with HiGHS (time limit 60.0 s, gap 1e-06); it <mark>minimises -objective</mark></pre>
+<div class="note"><b>Signs.</b> <code>scipy.optimize.milp</code> only minimises, so <code>solver.py</code> passes
+<i>−objective</i>. Every number HiGHS prints is therefore negative: <code>BestSol -8810.25</code> means a plan worth
+<b>8,810.25</b>. For the bound column, "lower" in HiGHS's terms means "upper" in ours.</div>
+
+<pre>MIP has 51386 rows; 60146 cols; 273681 nonzeros; 52327 integer variables (52327 binary)
+Coefficient ranges:
+  Matrix  [1e+00, 5e+00]
+  Cost    [1e+00, 2e+02]
+  Bound   [1e+00, 1e+00]
+  RHS     [1e+00, 3e+02]</pre>
+<ul>
+  <li><b>nonzeros</b>: entries in the constraint matrix. Solve time grows with this more than with the row count.</li>
+  <li><b>Coefficient ranges</b>: the smallest and largest absolute numbers in the constraints (Matrix), the objective
+    (Cost), the variable bounds and the right-hand sides. All of them are within 1–300 here, which is <i>well
+    scaled</i>. Ranges like 1e-6 to 1e+6 would cause numerical trouble and are typical of big-M constraints. We have
+    none.</li>
+</ul>
+
+<pre>Presolving model
+51385 rows, 60146 cols, 273369 nonzeros  0s
+22676 rows, 60146 cols, 225599 nonzeros  1s
+Presolve reductions: rows 22676(<mark>-28710</mark>); columns 60146(-0); nonzeros 225599(-48082)</pre>
+<p>Presolve simplifies the model before solving: it drops redundant or dominated rows, fixes variables, tightens
+coefficients. Here it <b>removes 28,710 rows (56%)</b> and no columns. Those rows were pure overhead: building them
+costs time in Python, and HiGHS discards them anyway.</p>
+
+<pre>Solving MIP model with:
+   22676 rows
+   60146 cols (52327 binary, 0 integer, 1267 implied int., 6552 continuous, 0 domain fixed)</pre>
+<p><b>implied int.</b>: continuous variables that presolve proved are integer in any solution anyway (likely the
+<code>q</code> improvement-bonus variables). <b>continuous</b>: the <code>y</code> neighbour-bonus variables, which
+are declared continuous because the constraints force them to 0 or 1. That saves branching.</p>
+
+<h2 id="table">4. [4] The progress table</h2>
+<p>A MIP solver works with two numbers at once:</p>
+<ul>
+  <li><b>BestSol</b> (the <i>primal bound</i>, "incumbent"): the best real plan found so far. It only ever improves.</li>
+  <li><b>BestBound</b> (the <i>dual bound</i>): a proven limit. No plan can be worth more than this. It comes from the
+    LP relaxation (binaries allowed to be fractional), tightened by cuts and branching. It only ever moves down
+    towards BestSol.</li>
+  <li><b>Gap</b> = |BestBound − BestSol| / |BestSol|. At 0% (within <code>mip_rel_gap</code>) the plan is proven
+    optimal.</li>
+</ul>
+<div class="wrap"><pre>        Nodes      |    B&amp;B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work
+Src  Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+ J       0       0         0   0.00%   -inf            -207               Large        0      0      0         0     3.2s
+ R       0       0         0   0.00%   -8961.889881    -5474.25          63.71%        0      0      0     19301     6.3s
+ C       0       0         0   0.00%   -8944.842359    -7161             24.91%     2219     13      0     21174    10.5s
+         0       0         0   0.00%   -8932.044258    -7161             24.73%     3361     30      0     24323    15.7s
+         0       0         0   0.00%   -8923.536951    -7161             24.61%     4419     37      0     25770    21.3s
+         0       0         0   0.00%   -8920.108631    -7161             24.57%     5277     49      0     28037    27.1s
+ L       0       0         0   0.00%   -8920.108631    -8810.25           1.25%     5277     49      0     28037    43.9s
+         0       0         0   0.00%   -8919.639795    -8810.25           1.24%     4381     42      0     40982    60.1s</pre></div>
+
+<h3>Columns</h3>
+<table>
+  <tr><th>Column</th><th>Meaning</th></tr>
+  <tr><td><b>Src</b></td><td>What produced a new best plan on that line (legend printed just above the table). Blank
+    means a periodic progress line. In this run: <b>J</b> feasibility jump, <b>R</b> randomised rounding, <b>C</b>
+    central rounding, <b>L</b> sub-MIP (fix part of the variables, solve the smaller MIP). <b>B</b> would be a plan
+    found by branching, <b>T</b> one found at a node.</td></tr>
+  <tr><td><b>Proc.</b></td><td>Branch-and-bound nodes processed. A node is a subproblem with some binaries fixed to 0
+    or 1.</td></tr>
+  <tr><td><b>InQueue</b></td><td>Open nodes still waiting to be explored.</td></tr>
+  <tr><td><b>Leaves / Expl.</b></td><td>Finished leaves of the tree, and the share of the tree that has been explored
+    (by volume). Proven optimal at 100%.</td></tr>
+  <tr><td><b>BestBound, BestSol, Gap</b></td><td>See above.</td></tr>
+  <tr><td><b>Cuts</b></td><td>Cutting planes generated: extra valid inequalities that remove fractional LP solutions
+    and push BestBound down.</td></tr>
+  <tr><td><b>InLp</b></td><td>How many of those cuts are currently kept in the LP.</td></tr>
+  <tr><td><b>Confl.</b></td><td>Conflict constraints learnt from infeasible nodes (like a SAT solver's learnt
+    clauses).</td></tr>
+  <tr><td><b>LpIters</b></td><td>Total simplex iterations so far. This is the "work" measure.</td></tr>
+  <tr><td><b>Time</b></td><td>Wall-clock seconds since HiGHS started.</td></tr>
+</table>
+
+<h3>This run, line by line</h3>
+<table>
+  <tr><th>Time</th><th>What happened</th></tr>
+  <tr><td class="num">3.2 s</td><td>The <b>J</b> heuristic finds a first plan (worth 207, i.e. almost empty). No LP
+    solved yet, so no bound (<code>-inf</code>).</td></tr>
+  <tr><td class="num">6.3 s</td><td>The root LP is solved (19,301 iterations): <b>no plan can beat 8,961.9</b>.
+    Rounding the LP solution gives a plan worth 5,474.</td></tr>
+  <tr><td class="num">10.5–27.1 s</td><td>Cut rounds: 2,219 → 5,277 cuts tighten the bound from 8,945 to 8,920.
+    A rounded plan worth 7,161 arrives at 10.5 s. The gap stays near 25% because the incumbent is poor, not because the
+    bound is weak.</td></tr>
+  <tr><td class="num">43.9 s</td><td>The sub-MIP heuristic (<b>L</b>) finds a plan worth <b>8,810.25</b>. The gap
+    drops from 24.6% to 1.25%. This line does almost all of the useful work.</td></tr>
+  <tr><td class="num">60.1 s</td><td>Time limit. The bound has barely moved (8,919.6).</td></tr>
+</table>
+<div class="note"><b>Proc. is 0 on every line.</b> HiGHS never branched: all 60 s were spent at the <i>root node</i>
+(LP, cuts and heuristics). On the smaller test cases, the root bound is close enough that a few hundred nodes finish
+the job. Here the root alone uses up the budget.</div>
+
+<h2 id="chart">5. Bound and solution over time</h2>
+<div class="chart">
+  <svg id="plot" viewBox="0 0 640 300" role="img" aria-label="BestBound and BestSol of the shuffle-radius18 run over 60 seconds"></svg>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--bound)"></span>BestBound: no plan can be worth more</span>
+    <span><span class="sw" style="background:var(--sol)"></span>BestSol: best plan found</span>
+  </div>
+</div>
+<p>The proven optimum lies somewhere between the two lines. Where the curves end, the gap is at most 109 points out
+of 8,810 (1.24%). The plan could be up to 1.24% better than the one we have, and in practice is usually much
+closer, because the bound tends to be the weaker of the two.</p>
+
+<h2 id="report">6. [4] Solving report</h2>
+<pre>  Status            Time limit reached
+  Primal bound      -8810.25
+  Dual bound        -8919.63979508
+  Gap               1.24% (tolerance: 0.0001%)
+  P-D integral      1171.47328946
+  Solution status   feasible
+                    0 (bound viol.)  0 (int. viol.)  0 (row viol.)
+  Nodes             0
+  LP iterations     40982
+                    0 (strong br.)  9247 (separation)  12434 (heuristics)
+  -> time limit in 60.4 s, objective 8,810.25</pre>
+<table>
+  <tr><th>Line</th><th>Meaning</th></tr>
+  <tr><td><b>Status</b></td><td><code>Optimal</code> is what we want. <code>Time limit reached</code> means we still
+    get the best plan found, but it isn't proven optimal. <code>Infeasible</code> would mean a modelling bug.</td></tr>
+  <tr><td><b>Primal / Dual bound</b></td><td>Final BestSol and BestBound.</td></tr>
+  <tr><td><b>Gap</b> (tolerance)</td><td>1.24% achieved, against 0.0001% asked (<code>mip_rel_gap = 1e-6</code> in
+    <code>config/default.toml</code>).</td></tr>
+  <tr><td><b>P-D integral</b></td><td>The gap integrated over time: area between the two curves above, normalised.
+    Lower means it got close sooner. Only useful for comparing runs of the same model, e.g. two
+    formulations.</td></tr>
+  <tr><td><b>Solution status / violations</b></td><td><code>feasible</code> with 0 bound, integrality and row
+    violations: the plan satisfies every constraint exactly.</td></tr>
+  <tr><td><b>LP iterations</b> split</td><td>Where the simplex work went: 9,247 on cut separation, 12,434 inside
+    heuristics (mostly the sub-MIP), the rest on the root LP. None on strong branching, because it never
+    branched.</td></tr>
+</table>
+
+<h2 id="result">7. [5] Result: score vs objective</h2>
+<pre>  score 4032.8 = site 2643.0 + adjacency 493.0 + improvements 1116.0 - covered tiles 219.2
+  35 cities (35 new, 0 existing) · 141 districts (4.03 per city) · 124 improvements (3.54 per city)</pre>
+<p>The <b>score</b> (4,032.8) and the solver's <b>objective</b> (8,810.25) are different numbers on purpose:</p>
+<ul>
+  <li>The objective includes the bonuses that make the solver build as much as possible:
+    <code>city_bonus</code> 100 × 35 cities + <code>district_bonus</code> 10 × 141 districts = <b>4,910</b>.
+    <code>evaluate()</code> leaves them out.</li>
+  <li>Score + bonuses = 8,942.8, about 133 more than the objective. <code>evaluate()</code> counts adjacency from
+    <i>every</i> planned district (e.g. "+1 per 2 districts", including other cities' districts). The MIP only sees
+    each district's adjacency to existing districts, its own city centre and the few <code>y</code>/<code>q</code>
+    bonuses. The real plan is slightly better than the solver believed.</li>
+</ul>
+<p>The validation lines below the score check rules the model doesn't enforce. In this run, 35 placements sit on a
+tile next to another city's centre, which that city would claim when founded.</p>
+
+<h2 id="verdict">8. What this run tells us</h2>
+<ul>
+  <li><b>Good plan, not proven optimal</b>: at most 1.24% below the optimum. For planning a game, that's
+    fine.</li>
+  <li><b>The useful work happened at 43.9 s</b> (sub-MIP). With <code>mip_rel_gap = 0.015</code> the run would have
+    stopped there with the same plan. A 1–2% gap tolerance is a cheap way to cap solve times on large maps.</li>
+  <li><b>No branching at all</b> suggests the root node is expensive: 5,000+ cuts on a 60,000-column model. Fewer
+    candidates (district options are 83% of the columns) would help more than more time.</li>
+  <li><b>Presolve removes 56% of the rows.</b> Finding which family they come from (likely
+    <code>not_next_to_planned_city</code>) and not generating them would save build time and memory.</li>
+  <li>This is the kind of instance where a <b>CP-SAT comparison</b> would be informative: mostly binary, and the plan
+    came from a heuristic, not from closing the bound.</li>
+</ul>
+<p class="muted">Quick checklist for any log: Status in [4] (Optimal?), the final Gap, total time, the line where
+BestSol made its last big jump, and Proc. (did it branch at all?).</p>
+
+</main>
+<script>
+(() => {
+  const pts = [ // [time s, BestBound, BestSol] from the log, signs flipped to our maximisation
+    [6.3, 8961.889881, 5474.25], [10.5, 8944.842359, 7161], [15.7, 8932.044258, 7161],
+    [21.3, 8923.536951, 7161], [27.1, 8920.108631, 7161], [43.9, 8920.108631, 8810.25], [60.1, 8919.639795, 8810.25]];
+  const W = 640, H = 300, L = 56, R = 16, T = 14, B = 36;
+  const x0 = 0, x1 = 62, y0 = 5000, y1 = 9200;
+  const X = t => L + (t - x0) / (x1 - x0) * (W - L - R);
+  const Y = v => T + (y1 - v) / (y1 - y0) * (H - T - B);
+  const svg = document.getElementById('plot');
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (n, a, txt) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); if (txt) e.textContent = txt; svg.appendChild(e); return e; };
+  for (let v = 5000; v <= 9000; v += 1000) {
+    el('line', {x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: 'var(--line)'});
+    el('text', {x: L - 8, y: Y(v) + 4, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--muted)'}, v.toLocaleString('en'));
+  }
+  for (let t = 0; t <= 60; t += 10)
+    el('text', {x: X(t), y: H - B + 18, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--muted)'}, t + ' s');
+  // step lines: each value holds until the next log line
+  const step = i => { let d = ''; pts.forEach((p, k) => { d += (k ? `H${X(p[0])}V${Y(p[i])}` : `M${X(p[0])},${Y(p[i])}`); }); return d; };
+  el('path', {d: step(1), fill: 'none', stroke: 'var(--bound)', 'stroke-width': 2.5});
+  el('path', {d: step(2), fill: 'none', stroke: 'var(--sol)', 'stroke-width': 2.5});
+  el('line', {x1: X(60), x2: X(60), y1: T, y2: H - B, stroke: 'var(--muted)', 'stroke-dasharray': '4 4'});
+  el('text', {x: X(60) - 6, y: T + 12, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--muted)'}, 'time limit');
+  el('text', {x: X(43.9) - 6, y: Y(8810.25) + 20, 'text-anchor': 'end', 'font-size': 12, fill: 'var(--ink)'}, 'sub-MIP (L) at 43.9 s');
+  el('text', {x: X(27.1), y: Y(7161) + 18, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--ink)'}, 'gap ≈ 25%');
+})();
+</script>
+</body></html>

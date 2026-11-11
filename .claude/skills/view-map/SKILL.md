@@ -21,8 +21,9 @@ hexes. What a tile shows:
   hub, **F** holy site, **T** theater, **E** encampment, **H** harbor, **A** aqueduct, **D** dam; improvements in lowercase: **f** farm, **m** mine,
   **q** quarry, **p** plantation, **c** camp, **s** pasture, **b** fishing boats, **l** lumber mill)
   plus a thick hex
-  outline in the tack's colour. The side panel lists the tacks (click to zoom to
-  one) and the planner's notes.
+  outline in the tack's colour (hover a tack for its name). The side panel holds
+  only the toggles, the legend and the hovered tile's fields; placements and notes are
+  in `decisions.json` and `index.html`.
 
 Hover shows every tile field; drag pans, scroll zooms (by how far the wheel/touchpad
 moved, clamped; tiles carry only non-empty fields, hidden tiles are drawn on first use); checkboxes for hidden tiles
@@ -45,7 +46,7 @@ It plans every test case in `data/` and writes (git-ignored):
   compact metrics (incl. city spacing), the validation of the solution (`validate.py`:
   placements on another city's ring, tiles of another of your cities, range, shared
   tiles, spacing; every case in `decisions.json` → `validation`), and the map's path /
-  Live Server URL (placements: `decisions.json`, map side panel); `run.log`: the whole run exactly as the terminal showed it;
+  Live Server URL (placements: `decisions.json`, `index.html`); `run.log`: the whole run exactly as the terminal showed it;
   `summary.json`: all of them, for comparing runs (e.g. before/after a planner change).
 - The same text is printed to the console as the run goes, HiGHS's log live
   (`-q`/`--quiet` prints only the one-line summaries).

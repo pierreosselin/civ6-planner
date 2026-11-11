@@ -474,11 +474,17 @@ for (7); one per city for (8); one per city plus one per (new city, improvable t
   <tr><td>shuffle-revealed (43)</td><td>5</td><td>38</td><td>5,338</td><td>4,835</td><td>3.8 s</td></tr>
   <tr><td>shuffle-radius6 (127)</td><td>12</td><td>109</td><td>18,371</td><td>16,889</td><td>6.2 s</td></tr>
   <tr><td>shuffle (3,404)</td><td>57</td><td>400</td><td>72,579</td><td>54,237</td><td>32 s</td></tr>
+  <tr><td>continents-radius18 (967)</td><td>34</td><td>275</td><td>48,894</td><td>42,130</td><td>55 s</td></tr>
+  <tr><td>shuffle-radius18 (1,008)</td><td>35</td><td>312</td><td>60,146</td><td>51,386</td><td>60 s limit, gap 1.24%</td></tr>
+  <tr><td>continents, all sites (3,404)</td><td>88</td><td>710</td><td>117,817</td><td>100,902</td><td>60 s limit, gap 0.016%</td></tr>
+  <tr><td>shuffle, all sites (3,404)</td><td>78</td><td>673</td><td>115,859</td><td>95,631</td><td>60 s limit, gap 16.5%</td></tr>
 </table>
-<p class="muted">Default settings (400 city candidates); all proven optimal (gap 0); about 67 s for all six. The
-continents case's own <code>config.toml</code> now keeps all 710 legal sites (<code>max_city_candidates = 1000</code>): 117,817
-variables, 100,902 rows, 88 cities, stopped at the 60 s limit 0.016% from optimal (the best plan was found at 60.1 s;
-until then it was 10% off). (With food weighted 1, shuffle
+<p class="muted">First six rows: default settings (400 city candidates), all proven optimal (gap 0), about 67 s
+for all six. The <code>radius18</code> cases (radius 18 around the player's start) sit at the 60 s limit. The full maps'
+own <code>config.toml</code> now keep all legal sites (<code>max_city_candidates = 1000</code>, also set on
+shuffle-revealed, which has only 38): continents stopped 0.016% from optimal (the best plan was found at 60.1 s; until
+then it was 10% off); shuffle found a single plan at 11.5 s, by rounding, and nothing better after it: 16.5% from the
+bound, with only 2.7 districts per city, so that case needs a longer time limit or a starting plan. (With food weighted 1, shuffle
 stopped at the 60 s limit 0.026% from optimal.) Each log ends with metrics (<code>metrics.py</code>): districts and improvements per city, and per
 type the count, the share of cities that have one, and the mean adjacency or value. On continents: 3.9 districts per
 city (an Industrial Zone in every city, a Campus in 80%, an Aqueduct in 73%, a Harbor in 46%, a Commercial Hub in 45%);
@@ -494,8 +500,10 @@ A live game's revealed area is the size of the first rows: under a second.</p>
   \(m_\alpha\kappa_{\alpha,t}\le\) (matching existing neighbours) \(+\sum_{u\in N_1(t)}\sum z_{\cdot,\cdot,u}\) and
   \(\kappa_{\alpha,t}\le\lfloor 6/m_\alpha\rfloor\sum_c z_{d,c,t}\). A first try weakened the relaxation and slowed HiGHS,
   so it waits. \(S\) (§12) already counts these bonuses.</li>
-  <li><b>Tile ownership and timing</b> (measured after each solve by <code>validate.py</code>: 12–19% of districts and
-  improvements on the test maps sit next to another planned city's centre, a tile that city claims when founded). In the game a district goes on a tile its city owns; borders grow over time or
+  <li><b>Tile ownership and timing</b> (measured after each solve by <code>validate.py</code>: 10–19% of districts and
+  improvements on the test maps sit next to another planned city's centre, a tile that city claims when founded,
+  unless it is already owned: a tile never moves between a player's cities, so such a placement holds if its city
+  owns the tile, through borders or a bought tile, before the neighbour is founded; founding order decides). In the game a district goes on a tile its city owns; borders grow over time or
   through bought tiles, and a tile belongs to one city. The model allows any free tile within 3 and lets a district sit
   in another planned city's range.</li>
   <li><b>Improvements</b>: technology- and civic-gated rules (Farms on hills, bonus yields later in the game), Farm

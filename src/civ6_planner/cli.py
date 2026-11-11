@@ -137,11 +137,14 @@ def cmd_watch(args):
 def cmd_view(args):
     d, label, original = _load(args)
     gmap = GameMap(d)
-    planned, notes = [], []
+    planned: list[planner.Tack] = []
+    notes: list[str] = []
     if args.plan:
         planned, notes = planner.plan(gmap, Rules.from_game(), random.Random(args.seed), args.planner,
                                    _config(args))
-    path = viewer.write(d, args.output, title=label, tacks=planned, notes=notes, hidden_from=original)
+    path = viewer.write(d, args.output, title=label, tacks=planned, hidden_from=original)
+    for note in notes:
+        print(f"  {note}")
     print(f"{label}: {len(gmap)} tiles{', ' + str(len(planned)) + ' tacks' if args.plan else ''} -> {path}")
     if args.open:
         import webbrowser

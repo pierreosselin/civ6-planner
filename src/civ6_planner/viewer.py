@@ -26,7 +26,7 @@ def _slim(t: dict) -> dict:
     return {k: v for k, v in t.items() if k in _KEEP or (k != "neighbours" and v not in (0, False, "NONE", -1, None))}
 
 
-def write(d, path, title="", tacks=(), notes=(), hidden_from=None):
+def write(d, path, title="", tacks=(), hidden_from=None):
     """Write the page for dump `d`. hidden_from: the unmasked map, if d is masked."""
     shown = {t["i"] for t in d["tiles"]}
     hidden = [t for t in hidden_from["tiles"] if t["i"] not in shown] if hidden_from else []
@@ -38,7 +38,6 @@ def write(d, path, title="", tacks=(), notes=(), hidden_from=None):
     }
     page = (_TEMPLATE
             .replace("__TITLE__", html.escape(title or "map"))
-            .replace("__NOTES__", "".join(f"<li>{html.escape(n)}</li>" for n in notes))
             .replace("__DATA__", json.dumps(data, separators=(",", ":")).replace("</", "<\\/")))
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)
@@ -60,15 +59,9 @@ _TEMPLATE = r"""<!doctype html>
   aside { background:var(--panel); border-left:1px solid var(--line); padding:14px 16px; overflow:auto; }
   h1 { font-size:15px; font-weight:600; margin:0 0 4px; word-break:break-word; }
   .muted { color:var(--muted); font-size:12px; }
-  ul { padding-left:18px; margin:6px 0 12px; }
   .legend { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:3px 8px; font-size:12px; margin:8px 0 12px; }
   .sw { display:inline-block; width:11px; height:11px; border-radius:2px; vertical-align:-1px; margin-right:5px; border:1px solid rgba(0,0,0,.15); }
   #info { font:12px/1.45 ui-monospace, monospace; white-space:pre-wrap; background:var(--bg); border-radius:6px; padding:8px; min-height:60px; }
-  .tack { display:flex; align-items:center; gap:6px; width:100%; text-align:left; margin:4px 0; padding:5px 8px; font:inherit;
-          color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:6px; cursor:pointer; }
-  .tack:hover { border-color:var(--muted); }
-  .badge { display:inline-grid; place-items:center; width:20px; height:20px; border-radius:50%; color:#fff; font-weight:700; font-size:12px; flex:none; }
-  #tackList { margin:0 0 12px; }
   label { font-size:13px; display:block; margin:4px 0; }
   @media (max-width: 700px) { body { grid-template-columns:1fr; height:auto; } #map { height:70vh; } aside { border-left:0; } }
 </style></head>
@@ -76,9 +69,7 @@ _TEMPLATE = r"""<!doctype html>
 <svg id="map" xmlns="http://www.w3.org/2000/svg"></svg>
 <aside>
   <h1>__TITLE__</h1>
-  <div class="muted" id="summary"></div>
-  <ul>__NOTES__</ul>
-  <div id="tackList"></div>
+  <div class="muted" id="summary" style="margin-bottom:8px"></div>
   <label><input type="checkbox" id="showHidden"> Show hidden tiles (faded)</label>
   <label><input type="checkbox" id="showRes" checked> Resource labels</label>
   <label><input type="checkbox" id="showYields" checked> Yields</label>
@@ -267,17 +258,6 @@ let vb = pts.length ? (() => {
 const apply = () => svg.setAttribute("viewBox", vb.map(v => v.toFixed(1)).join(" "));
 const FULL_W = D.w * SQ3 * R * 1.5;  // zoomed out at most to 1.5 map widths, in at most to 3 tiles
 apply();
-const tackList = document.getElementById("tackList");
-if (D.tacks.length) tackList.innerHTML = "<b>Tacks</b> <span class=muted>(click to zoom)</span>";
-D.tacks.forEach(k => {
-  const [letter, color] = TACK[k.icon] || ["?", "#333"];
-  const b = document.createElement("button");
-  b.className = "tack";
-  const yl = YIELDS.filter(([y]) => (k.yields || {})[y] > 0).map(([y]) => `+${k.yields[y]} ${nice(y.replace("YIELD_", "RESOURCE_"))}`).join(", ");
-  b.innerHTML = `<span class="badge" style="background:${color}">${letter}</span>${k.name}${yl ? " · " + yl : ""} <span class="muted">(${k.x}, ${k.y})</span>`;
-  b.onclick = () => { const [cx, cy] = centre(k.x, k.y), w = 12 * R, h = 9 * R; vb = [cx - w / 2, cy - h / 2, w, h]; apply(); };
-  tackList.appendChild(b);
-});
 svg.addEventListener("wheel", e => {
   e.preventDefault();
   // Zoom by how far the wheel or touchpad moved (lines and pages turned into pixels),
