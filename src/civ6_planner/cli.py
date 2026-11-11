@@ -163,18 +163,14 @@ def cmd_results(args):
     out = args.output or os.path.join("results", time.strftime("%Y%m%d-%H%M%S"))
     scenarios = dataset.cases()
     if args.only:
-        scenarios = [s for s in scenarios if any(k in s for k in args.only)]
+        unknown = [k for k in args.only if k not in scenarios]
+        if unknown:
+            sys.exit(f"unknown test case {', '.join(unknown)}; cases: {', '.join(scenarios)}")
+        scenarios = list(args.only)
     summary = results.run(out, scenarios, seed=args.seed, method=args.planner, config_file=args.config,
                           echo=None if args.quiet else print)
-    for r in summary["scenarios"]:
-        counts: dict[str, int] = {}
-        for t in r["tacks"]:
-            kind = "City" if t["icon"] == planner.CITY_ICON else planner.district_name(t["icon"].removeprefix("ICON_"))
-            counts[kind] = counts.get(kind, 0) + 1
-        placed = ", ".join(f"{n} {name}" for name, n in counts.items()) or "nothing"
-        solver = r["solver"]
-        print(f"  {r['name']:<22} score {r['score']:>8}  {solver.get('status', '')} {solver.get('seconds', '')}s  {placed}")
-    print(f"-> {os.path.join(out, 'index.html')}")
+    for line in results.summary_lines(summary, out):
+        print(line)
     if args.open:
         import webbrowser
         webbrowser.open("file://" + os.path.abspath(os.path.join(out, "index.html")))
@@ -248,7 +244,7 @@ def main(argv=None):
     p.add_argument("--planner", choices=planner.METHODS, default="mip", help="mip (default) or the greedy stub")
     p.add_argument("--config", metavar="FILE", help="settings TOML overlaid last (after config/default.toml "
                                                      "and the test case's config.toml)")
-    p.add_argument("--only", nargs="+", metavar="TEXT", help="only maps whose name contains TEXT")
+    p.add_argument("--only", nargs="+", metavar="CASE", help="only these test cases, by exact name (e.g. continents shuffle-radius6)")
     p.add_argument("--open", action="store_true", help="open index.html in your browser")
     p.add_argument("-q", "--quiet", action="store_true",
                    help="don't print each map's optimisation log, only the summary")

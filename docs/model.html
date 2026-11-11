@@ -407,10 +407,11 @@ $$
   <li><b>Always feasible.</b> \(x=0, z=0\) satisfies every constraint, so the solver always returns a plan (empty when no
   tile qualifies).</li>
   <li><b>Districts are built whenever a tile is free.</b> Adding one district to a feasible solution, on a tile
-  \(t\in R_{d,c}\) that holds nothing planned and that (5) allows, for a founded city that lacks \(d\), changes \(f\) by
+  \(t\in R_{d,c}\) that holds nothing planned and that (5) and (7) allow, for a founded city that lacks \(d\) and is under
+  its population limit (8), changes \(f\) by
   \(a_{d,c,t}-\lambda v(t)+\beta_D \ge \beta_D-\lambda v(t)\), since \(a\ge0\). This is positive whenever
   \(v(t)&lt;\beta_D/\lambda=20\), true of every tile in practice. So at an optimum a city lacks a district only if every
-  tile of \(R_{d,c}\) is taken.</li>
+  tile of \(R_{d,c}\) is taken, or (for a specialty district) it already has \(K\) of them.</li>
   <li><b>Cities are a soft priority.</b> \(\beta_C=100\) is not a proven bound: founding one more city can displace other
   cities and districts, and the model accepts it only if the loss elsewhere is below \(\beta_C+s_c\). On the test maps it
   packs as many cities as the spacing allows.</li>
@@ -460,8 +461,11 @@ the values used.</p>
 minimises, so the objective passed is \(-f\); its log (presolve, branch and bound, final report) is captured into each
 run's <code>optimisation.log</code>. Status <code>optimal</code> means proven optimal within the relative gap;
 <code>time limit</code> returns the best plan found so far.</p>
-<p>Size: \(|x| = |C|\) and \(|z| = |Z| \le |D|\,(|C|+|E|)\cdot 36\). Rows: one for (1); \(|\mathcal{Q}|+|U|\) for (2); at most
-\(|D|(|C|+|E|)\) for (3); at most \(|T|\) for (4); one per pair of Encampment variable and neighbouring site for (5).</p>
+<p>Size: \(|x| = |C|\); \(|z| = |Z| \le |D|\,(|C|+|E|)\cdot 36\); \(|\omega| = |Q| \le J\,(|C|+|E|)\); one \(y\) per
+(bonus pair, city, tile of \(R_{d,c}\)) and one \(q\) per (bonus rule, improvement option) with a district tile next to it.
+Rows: one for (1); \(|\mathcal{Q}|+|U|\) for (2); at most \(|D|(|C|+|E|)\) for (3); at most \(|T|\) for (4); one per pair of
+Encampment variable and neighbouring site for (5); two per \(y\) plus one per (bonus pair, city) for (6); one per river
+for (7); one per city for (8); one per city plus one per (new city, improvable tile) for (9); two per \(q\) for (10).</p>
 <table>
   <tr><th>Test case (tiles)</th><th>New cities</th><th>\(|C|\)</th><th>Variables</th><th>Rows</th><th>Time</th></tr>
   <tr><td>continents-revealed (43)</td><td>5</td><td>38</td><td>5,184</td><td>4,673</td><td>0.9 s</td></tr>
@@ -471,7 +475,10 @@ run's <code>optimisation.log</code>. Status <code>optimal</code> means proven op
   <tr><td>shuffle-radius6 (127)</td><td>12</td><td>109</td><td>18,371</td><td>16,889</td><td>6.2 s</td></tr>
   <tr><td>shuffle (3,404)</td><td>57</td><td>400</td><td>72,579</td><td>54,237</td><td>32 s</td></tr>
 </table>
-<p class="muted">Default settings; all proven optimal (gap 0); about 67 s for all six. (With food weighted 1, shuffle
+<p class="muted">Default settings (400 city candidates); all proven optimal (gap 0); about 67 s for all six. The
+continents case's own <code>config.toml</code> now keeps all 710 legal sites (<code>max_city_candidates = 1000</code>): 117,817
+variables, 100,902 rows, 88 cities, stopped at the 60 s limit 0.016% from optimal (the best plan was found at 60.1 s;
+until then it was 10% off). (With food weighted 1, shuffle
 stopped at the 60 s limit 0.026% from optimal.) Each log ends with metrics (<code>metrics.py</code>): districts and improvements per city, and per
 type the count, the share of cities that have one, and the mean adjacency or value. On continents: 3.9 districts per
 city (an Industrial Zone in every city, a Campus in 80%, an Aqueduct in 73%, a Harbor in 46%, a Commercial Hub in 45%);

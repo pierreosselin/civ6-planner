@@ -35,6 +35,7 @@ planned district, so it can be above the MIP's objective when planned districts 
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -512,24 +513,61 @@ OBJECTIVE: list[Step] = [
 ]
 
 
-def build(inst: Instance) -> Model:
+Progress = Callable[[str], Any]   # e.g. print; receives one line per stage of a run
+
+
+def build(inst: Instance, progress: Progress | None = None) -> Model:
+    """Run the VARIABLES, CONSTRAINTS and OBJECTIVE steps; with progress, report what each
+    adds (variables, rows, objective coefficients) as it goes."""
     m = Model()
-    for step in VARIABLES + CONSTRAINTS + OBJECTIVE:
-        step(m, inst)
+    for kind, steps in (("variables", VARIABLES), ("constraints", CONSTRAINTS), ("objective", OBJECTIVE)):
+        for step in steps:
+            n_vars, n_rows, obj = len(m.names), len(m.rows), list(m.obj)
+            step(m, inst)
+            if progress is None:
+                continue
+            if kind == "variables":
+                progress(f"  variables    {step.__name__:<26}{len(m.names) - n_vars:>8,} variables"
+                         f"   total {len(m.names):>8,}")
+            elif kind == "constraints":
+                progress(f"  constraints  {step.__name__:<26}{len(m.rows) - n_rows:>8,} rows     "
+                         f"   total {len(m.rows):>8,}")
+            else:
+                changed = sum(1 for a, b in zip(obj, m.obj) if a != b)
+                progress(f"  objective    {step.__name__:<26}{changed:>8,} coefficients")
     return m
 
 
 def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: int | str | None = None,
-             districts: tuple[str, ...] | None = None, improvements: tuple[str, ...] | None = None) -> Plan:
+             districts: tuple[str, ...] | None = None, improvements: tuple[str, ...] | None = None,
+             progress: Progress | None = None, record: Progress | None = None,
+             live: bool | None = None) -> Plan:
     """Best plan for n_cities new cities with their districts and improvements, plus the
     districts and improvements the player's existing cities can still get.
     cfg: a Config (None: config/default.toml); n_cities, districts, improvements override it."""
     cfg = cfg or config.default()
+    say = progress or (lambda line: None)
+    start = time.perf_counter()
+    say("[2/5] Candidates")
     inst = prepare(gmap, rules, cfg, cfg.n_cities if n_cities is None else n_cities,
                    cfg.districts if districts is None else districts, cfg.max_city_candidates,
                    cfg.improvements if improvements is None else improvements)
-    m = build(inst)
-    sol = m.solve(cfg.solver)
+    say(f"  {len(inst.sites)} city sites (best {cfg.max_city_candidates} by site value), "
+        f"{len(inst.own)} existing cities, up to {inst.n_cities} new cities")
+    say(f"  {sum(len(v) for v in inst.spots.values()):,} district options over {len(inst.districts)} types, "
+        f"{sum(len(v) for v in inst.ispots.values()):,} improvement options "
+        f"({cfg.improvement_candidates} best per city)   {time.perf_counter() - start:.1f} s")
+    say("[3/5] Building the model")
+    start = time.perf_counter()
+    m = build(inst, progress)
+    say(f"  {len(m.names):,} variables ({sum(m.integer):,} integer), {len(m.rows):,} rows"
+        f"   {time.perf_counter() - start:.1f} s")
+    say(f"[4/5] Solving with HiGHS (time limit {cfg.solver.get('time_limit')} s, "
+        f"gap {cfg.solver.get('mip_rel_gap')}); it minimises -objective")
+    sol = m.solve(cfg.solver, live=progress is not None if live is None else live)
+    if record:
+        record(sol.log.rstrip())   # for a log file (the terminal shows it live when live)
+    say(f"  -> {sol.status} in {sol.seconds:.1f} s, objective {sol.objective:,.2f}")
     plan = Plan(log=sol.log, info={"status": sol.status, "seconds": round(sol.seconds, 3), "objective": sol.objective,
                                    "city_candidates": len(inst.sites), **sol.stats})
     plan.config = cfg

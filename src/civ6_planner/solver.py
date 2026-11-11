@@ -7,11 +7,13 @@ HiGHS through scipy.optimize.milp. Another backend (CP-SAT, SCIP…) only needs 
 import contextlib
 import math
 import os
+import pty
 import sys
-import tempfile
+import termios
+import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Hashable, Iterable, Mapping
+from typing import Any, Hashable, Iterable, Iterator, Mapping
 
 Var = Hashable   # a variable is known by its name, e.g. ("city", (11, 17))
 
@@ -68,12 +70,13 @@ class Model:
         elif lo > 0 or hi < 0:
             raise ValueError("empty row that can't hold")
 
-    def solve(self, options: dict[str, Any] | None = None) -> Solution:
-        """Maximise; HiGHS's log goes into Solution.log (not to the terminal).
+    def solve(self, options: dict[str, Any] | None = None, live: bool = False) -> Solution:
+        """Maximise; HiGHS's log goes into Solution.log, and also to the terminal as it
+        runs when live is True.
         options: scipy.optimize.milp options (time_limit, mip_rel_gap, presolve,
         node_limit); disp is forced on so there is a log to capture."""
         options = {"time_limit": 60.0, "mip_rel_gap": 1e-6, **(options or {}), "disp": True}
-        with _capture_stdout() as out:
+        with _capture_stdout(tee=live) as out:
             sol = self._solve(options)
         sol.log = out.read()
         return sol
@@ -122,18 +125,41 @@ class _Captured:
 
 
 @contextlib.contextmanager
-def _capture_stdout():
-    """Capture what C code (HiGHS) prints to file descriptor 1."""
+def _capture_stdout(tee: bool = False) -> Iterator[_Captured]:
+    """Capture what C code (HiGHS) prints to file descriptor 1; with tee, also pass it on
+    to the real stdout as it comes. A pseudo-terminal, not a pipe, so the C library
+    keeps line buffering and the log appears line by line."""
     out = _Captured()
     sys.stdout.flush()
     saved = os.dup(1)
-    with tempfile.TemporaryFile(mode="w+b") as tmp:
-        os.dup2(tmp.fileno(), 1)
-        try:
-            yield out
-        finally:
-            sys.stdout.flush()
-            os.dup2(saved, 1)
-            os.close(saved)
-            tmp.seek(0)
-            out.text = tmp.read().decode("utf-8", "replace")
+    master, slave = pty.openpty()
+    attrs = termios.tcgetattr(slave)
+    attrs[1] &= ~termios.ONLCR                      # keep "\n", don't turn it into "\r\n"
+    termios.tcsetattr(slave, termios.TCSANOW, attrs)
+    chunks: list[bytes] = []
+
+    def pump() -> None:
+        while True:
+            try:
+                data = os.read(master, 4096)
+            except OSError:                         # EIO: the slave side is closed
+                break
+            if not data:
+                break
+            chunks.append(data)
+            if tee:
+                os.write(saved, data)
+
+    reader = threading.Thread(target=pump, daemon=True)
+    reader.start()
+    os.dup2(slave, 1)
+    os.close(slave)
+    try:
+        yield out
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved, 1)                           # closes the last handle on the slave side
+        reader.join(timeout=5)
+        os.close(master)
+        os.close(saved)
+        out.text = b"".join(chunks).decode("utf-8", "replace")

@@ -6,3 +6,6 @@
 #
 # [objective.weights]
 # science = 2.0
+
+[problem]
+max_city_candidates = 1000         # all legal city sites (continents has 710), not just the best 400

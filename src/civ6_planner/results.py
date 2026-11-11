@@ -4,6 +4,7 @@ read and checked on the map without opening Civ VI.
     results/<run>/
       index.html             every test case: tacks placed, notes, link to its map
       summary.json           the same, for comparing runs
+      run.log                everything the run printed (all cases, HiGHS logs, summaries)
       <case>/decisions.json  one folder per test case data/<case>/
       <case>/config.toml     the complete settings used for it (rerun with --config)
       <map>/map.html         the map with the tacks drawn
@@ -15,9 +16,10 @@ import html
 import json
 import os
 import random
+import time
 from typing import Any, Callable
 
-from . import config, dataset, metrics, model, planner, viewer
+from . import config, dataset, metrics, model, paths, planner, viewer
 from .gamemap import GameMap
 from .model import Plan
 from .planner import Tack
@@ -48,20 +50,44 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
     """Plan every test case and write the folder. Returns the summary dict.
     Settings per case: config/default.toml, the case's config.toml, then config_file.
 
-    echo: a function such as print, called with each map's optimisation log as it
-    finishes (None: silent)."""
-    rules = rules or Rules.from_game()
+    echo: a function such as print, called with each line of the run as it happens
+    (stages, model size, HiGHS's log live, results); None: silent. The same text goes
+    into each case's optimisation.log."""
     os.makedirs(out_dir, exist_ok=True)
+    run_lines: list[str] = []
+    if rules is None:
+        start = time.perf_counter()
+        rules = Rules.from_game()
+        line = f"Game rules: {paths.GAMEPLAY_DB}   loaded in {time.perf_counter() - start:.1f} s"
+        run_lines.append(line)
+        if echo:
+            echo(line)
     records: list[dict[str, Any]] = []
     summary = {"seed": seed, "method": method, "config_file": config_file, "scenarios": records}
     for name in scenarios or dataset.cases():
+        start = time.perf_counter()
         d = dataset.load_map(name)
         cfg = config.load(dataset.config_path(name), config_file)
         original = dataset.source_of(d)
         gmap = GameMap(d)
-        p = planner.solve(gmap, rules, random.Random(seed), method, cfg)
+        lines: list[str] = []
+
+        def say(line: str) -> None:
+            lines.append(line)
+            if echo:
+                echo(line)
+
+        for line in _header(name, d, len(gmap), method, seed, cfg):
+            say(line)
+        say(f"[1/5] Map: {os.path.relpath(dataset.map_path(name), paths.REPO_ROOT)}   "
+            f"loaded in {time.perf_counter() - start:.1f} s")
+        for line in metrics.map_summary(gmap, rules, d):
+            say(line)
+        p = planner.solve(gmap, rules, random.Random(seed), method, cfg,
+                          progress=say, record=lines.append, live=bool(echo))
         planned, notes = planner.to_tacks(gmap, rules, p), planner.explain(gmap, rules, p, method)
         score, parts = model.evaluate(gmap, rules, p) if p.cities or p.districts else (0.0, {})
+        stats = metrics.plan_metrics(gmap, rules, p)
         sc_dir = os.path.join(out_dir, name)
         os.makedirs(sc_dir, exist_ok=True)
         viewer.write(d, os.path.join(sc_dir, "map.html"), title=name, tacks=planned,
@@ -69,49 +95,75 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         record = {"name": name, "description": describe(d), "tiles": len(gmap),
                   "score": round(score, 2), "score_parts": parts,
                   "config": {"files": cfg.sources, **cfg.raw}, "solver": p.info,
-                  "metrics": metrics.plan_metrics(gmap, rules, p),
+                  "metrics": stats,
                   "tacks": [_tack_record(gmap, t) for t in planned], "notes": notes,
                   "map": f"{name}/map.html", "log": f"{name}/optimisation.log"}
         with open(os.path.join(sc_dir, "decisions.json"), "w") as f:
             json.dump(record, f, indent=1)
         with open(os.path.join(sc_dir, "config.toml"), "w") as f:
             f.write(config.to_toml(cfg))
-        log = _log(name, d, method, seed, p, record)
+        say("[5/5] Result")
+        if parts:
+            say(f"  score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
+                f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}")
+        for line in metrics.format_summary(stats):
+            say(line)
+        for line in _where(sc_dir):
+            say(line)
+        say("")
         with open(os.path.join(sc_dir, "optimisation.log"), "w") as f:
-            f.write(log)
-        if echo:
-            echo(log)
+            f.write("\n".join(lines) + "\n")
+        run_lines += lines
         records.append(record)
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=1)
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(_index(summary, os.path.basename(os.path.normpath(out_dir))))
+    with open(os.path.join(out_dir, "run.log"), "w") as f:
+        f.write("\n".join(run_lines + summary_lines(summary, out_dir)) + "\n")
     return summary
 
 
-def _log(name: str, d: dict[str, Any], method: str, seed: int, p: Plan, record: dict[str, Any]) -> str:
-    """The run in text: model settings, the solver's own log, then the decisions."""
-    rule = "=" * 72
-    lines = [f"{name}: {describe(d)}, {record['tiles']} tiles", f"planner: {method}, seed {seed}", ""]
-    if method == "mip":
-        c = p.config
-        lines += ["Model settings (" + " + ".join(c.sources) + ")",
-                  f"  problem        {c.n_cities} cities, districts {', '.join(c.districts)},"
-                  f" best {c.max_city_candidates} city sites",
-                  f"  weights        " + ", ".join(f"{k[6:].lower()} {v:g}" for k, v in c.weights.items()),
-                  f"  site radius    {c.site_radius}   loss factor {c.loss_factor}"
-                  f"   city bonus {c.city_bonus}   district bonus {c.district_bonus}",
-                  f"  solver         " + ", ".join(f"{k} {v}" for k, v in c.solver.items()),
-                  f"  constraints    {', '.join(p.model.get('constraints', []))}",
-                  f"  objective      {', '.join(p.model.get('objective', []))}",
-                  f"  size           " + ", ".join(f"{k} {v}" for k, v in p.info.items() if k != "objective"),
-                  "", rule, "HiGHS log (it minimises -objective; objective = score + bonuses)", rule,
-                  p.log.rstrip(), rule, ""]
-    lines += ["Metrics"] + [f"  {line}" for line in metrics.format_metrics(record["metrics"])] + [""]
-    lines += ["Decisions"] + [f"  {n}" for n in record["notes"]]
-    lines += ["", "Tacks"] + [f"  {t['name']:<8} ({t['x']}, {t['y']})  {t['tile']}  adds {t['yields'] or '-'}"
-                              for t in record["tacks"]]
-    return "\n".join(lines) + "\n"
+def summary_lines(summary: dict[str, Any], out_dir: str) -> list[str]:
+    """One line per case (score, solver status and time, what was placed), then the index
+    page. Printed at the end of a run, also when quiet, and the end of run.log."""
+    lines = []
+    for r in summary["scenarios"]:
+        counts: dict[str, int] = {}
+        for t in r["tacks"]:
+            icon = t["icon"].removeprefix("ICON_")
+            kind = ("City" if t["icon"] == planner.CITY_ICON else
+                    planner.improvement_name(icon) if icon.startswith("IMPROVEMENT_") else planner.district_name(icon))
+            counts[kind] = counts.get(kind, 0) + 1
+        placed = ", ".join(f"{n} {name}" for name, n in counts.items()) or "nothing"
+        solver = r["solver"]
+        lines.append(f"  {r['name']:<22} score {r['score']:>8}  {solver.get('status', '')} "
+                     f"{solver.get('seconds', '')}s  {placed}")
+    lines.append(f"-> {os.path.join(out_dir, 'index.html')}   (whole run: {os.path.join(out_dir, 'run.log')})")
+    return lines
+
+
+def _header(name: str, d: dict[str, Any], tiles: int, method: str, seed: int, cfg: config.Config) -> list[str]:
+    """Which case, and the settings that matter, before the run starts."""
+    rule = "=" * 96
+    return [rule, f"{name}: {describe(d)}, {tiles} tiles · planner {method}"
+            + (f", seed {seed}" if method != "mip" else ""), rule,
+            "Settings (" + " + ".join(cfg.sources) + ")",
+            f"  cities {cfg.n_cities}, {len(cfg.districts)} district types (at most {cfg.max_specialty_districts}"
+            f" specialty per city), {len(cfg.improvements)} improvement types (at most {cfg.max_improvements} per city)",
+            "  weights " + ", ".join(f"{k[6:].lower()} {v:g}" for k, v in cfg.weights.items())
+            + f"; site radius {cfg.site_radius}, loss {cfg.loss_factor}, worked tile {cfg.worked_tile_factor}"]
+
+
+def _where(sc_dir: str) -> list[str]:
+    """Where to look at the map with its tacks."""
+    page = os.path.join(sc_dir, "map.html")
+    rel = os.path.relpath(page, paths.REPO_ROOT)
+    out = ["Map with the tacks (every placement is listed in its side panel and in decisions.json):",
+           f"  {page}", f"  xdg-open {page}"]
+    if not rel.startswith(".."):
+        out.append(f"  Live Server: http://127.0.0.1:5500/{rel}")
+    return out
 
 
 def _index(summary: dict[str, Any], run_name: str) -> str:

@@ -65,12 +65,14 @@ METHODS = ("mip", "greedy")
 
 
 def solve(gmap: GameMap, rules: Rules, rng: random.Random | None = None, method: str = "mip",
-          cfg: Config | None = None) -> Plan:
+          cfg: Config | None = None, progress: model.Progress | None = None,
+          record: model.Progress | None = None, live: bool | None = None) -> Plan:
     """The plan (a model.Plan) from the chosen method. cfg: a config.Config (None: defaults);
-    the greedy stub ignores it but its plan is scored with it."""
+    the greedy stub ignores it but its plan is scored with it. progress: see model.optimise
+    (stages, model size as it is built, HiGHS's log live)."""
     cfg = cfg or config.default()
     if method == "mip":
-        return model.optimise(gmap, rules, cfg)
+        return model.optimise(gmap, rules, cfg, progress=progress, record=record, live=live)
     p = plan_greedy(gmap, rules, rng or random.Random())
     p.config = cfg   # the stub ignores the settings, but its plan is scored with them
     return p

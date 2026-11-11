@@ -31,7 +31,7 @@ Hover shows every tile field; drag pans, scroll zooms; checkboxes for hidden til
 
 ```bash
 civ6-planner results -o results/demo      # default: results/<date-time>
-civ6-planner results --only radius6 --planner greedy --seed 3
+civ6-planner results --only continents-radius6 shuffle-radius6 --planner greedy --seed 3   # exact case names
 ```
 
 It plans every test case in `data/` and writes (git-ignored):
@@ -39,10 +39,12 @@ It plans every test case in `data/` and writes (git-ignored):
   planner's notes, each linking to its map;
 - `<map>/map.html`: the map with the tacks; `<map>/decisions.json`: the scenario,
   tacks (with tile fields and yields), notes, score and its parts, solver stats;
-  `<map>/optimisation.log`: model settings, the full HiGHS log, metrics (districts per
-  city, share of cities with each district type, mean adjacency per type), the decisions;
+  `<map>/optimisation.log`: settings, map statistics, the model as it is built (counts
+  per variable, constraint and objective function), the full HiGHS log, score and
+  compact metrics, and the map's path / Live Server URL (placements: `decisions.json`,
+  map side panel); `run.log`: the whole run exactly as the terminal showed it;
   `summary.json`: all of them, for comparing runs (e.g. before/after a planner change).
-- Each map's optimisation log is also printed to the console as it finishes
+- The same text is printed to the console as the run goes, HiGHS's log live
   (`-q`/`--quiet` prints only the one-line summaries).
 - Settings per case: `config/default.toml`, then `data/<case>/config.toml`, then
   `--config FILE` (e.g. `config/science.toml`); each sets only what it changes, empty
