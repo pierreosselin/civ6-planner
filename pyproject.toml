@@ -7,6 +7,7 @@ name = "civ6-planner"
 version = "0.1.0"
 description = "Plan Civ VI city and district placement from the revealed map"
 requires-python = ">=3.11"   # tomllib
+license = { text = "MIT" }
 dependencies = [
     "scipy>=1.11",
 ]

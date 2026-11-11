@@ -1,144 +1,160 @@
 # civ6-planner
 
-Plans Civ VI city and district placement from the map you have revealed, and shows
-the plan in game as map tacks.
+Plans where to found cities and place districts and tile improvements in
+**Civilization VI: Gathering Storm**, from the part of the map you have revealed, and
+shows the plan in game as map tacks.
+
+A small Lua mod writes the map into your saves; a Python tool reads it, solves a
+mixed-integer programme (HiGHS) that maximises yields under the game's placement rules,
+and writes the plan back for the mod to place as tacks.
+
+![A planned map: cities (C), districts (S Campus, P Industrial Zone, G Commercial Hub, H Harbor, A Aqueduct, D Dam, ...) and improvements (lowercase), with each tile's yields and the bonus each tack adds](docs/screenshot.png)
 
 ```
-Civ VI + Map Dump mod ──(map dump inside each save)──▶ civ6_planner plan
+Civ VI + Map Dump mod ──(map dump inside each save)──▶ civ6-planner plan
         ▲                                                      │
-        └──── Ctrl+Shift+T places tacks ◀── mod/…/mapdump_plan.lua
+        └──── Ctrl+Shift+T places the tacks ◀── mod/…/mapdump_plan.lua
 ```
 
-## Current planner
+> **Status:** a personal project, developed and tested only on the **native Linux
+> (Aspyr) port under Steam**. Other platforms should work if `CIV6_USER_DIR` points at
+> the game's user folder (the one holding `Mods`, `Saves` and `Cache`), but that is
+> untested.
 
-The default planner is a MIP solved with HiGHS (`src/civ6_planner/model.py`): it places
-as many cities as fit, each with a Campus, Industrial Zone, Commercial Hub, Holy Site,
-Theater, Encampment, (on coast) Harbor, Aqueduct and Dam, and up to 5 tile improvements, to maximise the cities' site yields plus the
-districts' adjacency, minus the yields of the tiles they cover. See `docs/model.html`. The first stub below is still there
-as `--planner greedy`, for comparison.
+## What the plan contains
 
-Its parameters (yield weights, bonuses, cities and districts to plan, HiGHS time limit
-and gap) are in `config/default.toml`. `--config FILE` overrides some of them, e.g.
-`civ6-planner results --config config/science.toml`.
+With the default settings (`config/default.toml`) the optimiser:
 
-### Greedy stub
+- founds **as many new cities as fit** in the revealed area, more than 3 tiles from
+  any city, on the best sites;
+- gives each city (new, and your existing ones) up to **3 specialty districts**
+  (Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor),
+  plus an **Aqueduct** and a **Dam** where the game allows them;
+- gives each city up to **5 tile improvements** (Farm, Mine, Quarry, Plantation, Camp,
+  Pasture, Fishing Boats, Lumber Mill), on the tiles worth working;
+- maximises the cities' site yields + the districts' adjacency bonuses + the improved
+  tiles − the yields of the tiles districts cover, with food, production and science
+  weighted most.
 
-- **City**: a random revealed tile where a city can be founded.
-- **Campus**: within 3 tiles of that city, on the tile with the best science
-  adjacency from the game database (mountains, rainforest, reefs, geothermal
-  fissures, other districts including the planned city). Ties are broken at random.
+Placement and adjacency rules are read from the game's own database, so they follow
+the rules set and mods you play with. The full formulation is in
+[`docs/model.html`](docs/model.html) (open it in a browser; it renders the maths with
+KaTeX). Tiles holding one of your own map tacks are left alone.
 
-It decides from the latest map dump in the newest save. The autosave written at the
-start of a turn holds the dump taken at the start of the previous one, the turn you
-just finished.
+## Setup
 
-## Usage
-
-Set up once with [uv](https://docs.astral.sh/uv/): `uv sync` creates `.venv` with the
-dependencies and the package (editable, so code changes apply at once). Then, from the
-repository root:
+Requirements: Civilization VI with Gathering Storm, Python 3.11+, and
+[uv](https://docs.astral.sh/uv/).
 
 ```bash
-source .venv/bin/activate     # or prefix each command with `uv run`
+git clone https://github.com/pierreosselin/civ6-planner.git
+cd civ6-planner
+uv sync                        # creates .venv with the dependencies (SciPy) and the tool
+source .venv/bin/activate      # or prefix each command with `uv run`
+civ6-planner install-mod       # copies mod/mapdump into the game's Mods folder
 ```
 
+Then start Civ VI, enable **Map Dump** under Additional Content, and start or load a
+game. The mod's `.modinfo` is only read at start-up: restart the game after installing
+or updating the mod.
+
+## Using it in a game
+
+1. **Save** the game (the mod stores the revealed map at load and at the start of
+   each turn; the save carries it out of the game).
+2. Plan from the newest save:
+   ```bash
+   civ6-planner plan            # writes the plan the mod reads
+   civ6-planner plan --dry-run  # print it only
+   civ6-planner watch           # re-plan after every save (autosaves included)
+   ```
+3. Press **Ctrl+Shift+T** in game: the tacks appear, named per city ("City C1",
+   "Campus C1", "Campus Rome"); no reload needed.
+
+| In game | |
+|---|---|
+| **Ctrl+Shift+T** | place the planned tacks (re-reads the plan file) |
+| **Ctrl+Shift+C** | remove the planner's tacks |
+| **Ctrl+Shift+X** | remove every tack, yours too |
+| **Ctrl+Shift+F** | capture the whole map, fog ignored, into the next save (for test maps) |
+
+The planner's tacks are named `[MD] …` and only those are ever moved or removed. With
+[Detailed Map Tacks](https://steamcommunity.com/sharedfiles/filedetails/?id=2428969051)
+enabled, each tack shows the adjacency bonus it would get.
+
+## Settings
+
+Every parameter (cities to found, districts and improvements to plan, yield weights,
+per-city limits, solver time limit and gap) is in `config/default.toml`. Override some
+of them for one run with a small TOML file that sets only what changes:
+
 ```bash
-civ6-planner plan          # plan from the newest save, then press Ctrl+Shift+T in game
-civ6-planner plan --dry-run --seed 1
-civ6-planner watch         # re-plan automatically after every save
-civ6-planner clear         # empty plan; Ctrl+Shift+T then removes the tacks
-civ6-planner dump -o map.json --csv tiles.csv
-civ6-planner install-mod   # copy mod/mapdump into the game's Mods folder
+civ6-planner plan --config config/science.toml     # science weighted 3
 ```
 
 ## Developing without the game
 
-`view` writes a standalone HTML page of a map: terrain, hills, mountains, features,
-resources (by class), rivers, borders, and the planner's tacks. Drag to pan, scroll to
-zoom, hover for a tile's fields.
+`data/<case>/` holds test cases: `map.json` (a map captured from a real game) and
+`config.toml` (settings for that case). `continents` and `shuffle` are fully revealed
+74×46 maps; `*-revealed` and `*-radius6` are what a player sees early on.
 
 ```bash
-civ6-planner view --plan --open                 # newest save, with the plan
-civ6-planner view --map continents-radius6 --plan --open    # a test case from data/
+civ6-planner results -o results/run1                              # every test case
+civ6-planner results --only continents-radius6 -o results/run1    # one case, by name
+civ6-planner view --map continents-radius6 --plan --open          # one map page
+uv run python -m unittest discover -s tests                       # tests
 ```
 
-Every command that reads a map (`plan`, `view`) takes `--map NAME|FILE` instead of
-the newest save, and `--mask` to hide all but part of it, so the planner can be tried
-on more or less of a map:
+`results` prints each run as it goes (map statistics, the model as it is built, the
+solver's log, a summary with the share of cities getting each district) and writes
+`results/<run>/`: an `index.html` linking a map page per case (pan, zoom, hover a
+tile; every tack listed in the side panel), plus `decisions.json`, `optimisation.log`
+and `run.log`.
 
-```bash
-civ6-planner view --map earth1 --mask blob --size 80 --mask-seed 3 --plan --open
-civ6-planner plan --map earth1 --mask radius --size 6 --centre 30 20 --dry-run
-```
-
-- `blob`: `--size` tiles grown at random from the centre, like an explored area.
-- `radius`: every tile within `--size` of the centre.
-- `revealed`: exactly what the player had revealed when the map was captured.
-- `--centre X Y` (default: random land), `--mask-seed N` (repeatable masks),
-  `--resources visible` (drop resources the player's techs didn't show).
-
-In the page, "Show hidden tiles" draws the masked-out part of the map faded.
-
-### Test cases (`data/<case>/`)
-
-Each test case is a folder with `map.json` and `config.toml` (settings for that case,
-overlaid on `config/default.toml`; empty means the defaults). `--map <case>` uses both;
-`results` runs every case. Full maps come from real games, captured once:
-
-1. In game (any game you don't mind seeing in full), press **Ctrl+Shift+F**. A status
-   message confirms how many tiles were captured.
-2. Save the game.
-3. `civ6-planner dump --full -o data/NAME/map.json` (also creates an empty `config.toml`)
-
-Each tile keeps `revealed` and `resource_visible` from the moment of capture.
-
-Tests: `python -m unittest discover -s tests` (or VS Code's Testing panel).
-
-## In game
-
-- **Ctrl+Shift+T** re-reads the plan file and places its tacks, with the result shown
-  as a status message ("Map Dump: tacks placed 2, removed 2, …"). This works mid-game;
-  no reload needed.
-- **Ctrl+Shift+F** captures the whole map, fog ignored, into the next save (for test
-  maps; see above).
-- The planner's tacks are named `[MD] …`. Only those are ever moved or removed; a tile
-  holding one of your own tacks is skipped.
-- Loading a save also places the current plan. Detailed Map Tacks, if enabled, shows
-  the yields and adjacency of the planned tacks.
+New test maps: in a throwaway game press Ctrl+Shift+F, save, then
+`civ6-planner dump --full -o data/NAME/map.json`; `make-map` cuts masked versions
+(`--mask revealed|radius|blob`).
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `src/civ6_planner/dump.py` | reads the mod's `MAPDUMP|…` records out of saves (or Lua.log) |
-| `src/civ6_planner/gamemap.py` | the revealed map: tiles, neighbours, hex distance (odd-r, east-west wrap) |
-| `src/civ6_planner/rules.py` | placement rules, read from `Cache/DebugGameplay.sqlite` where possible |
-| `src/civ6_planner/planner.py` | the placement decisions; the optimiser goes here |
-| `src/civ6_planner/tacks.py` | writes the plan the mod reads |
-| `src/civ6_planner/dataset.py` | test maps and masking them into partial scenarios |
-| `src/civ6_planner/viewer.py` | the HTML map view |
-| `data/<case>/` | test cases: `map.json` + `config.toml` |
-| `config/` | default settings (`default.toml`) and example overrides |
-| `mod/mapdump/` | the Civ VI mod (Lua); install with `install-mod` |
+| `src/civ6_planner/model.py` | the optimiser: the MIP, one function per variable, constraint and objective term |
+| `src/civ6_planner/solver.py` | small modelling layer over HiGHS (`scipy.optimize.milp`) |
+| `src/civ6_planner/rules.py` | placement and adjacency rules from the game database |
+| `src/civ6_planner/gamemap.py` | the map: tiles, hex distance (odd-r, east–west wrap), rivers |
+| `src/civ6_planner/config.py` | settings: `config/default.toml`, case and `--config` overrides |
+| `src/civ6_planner/planner.py` | runs a planner and turns its plan into named tacks |
+| `src/civ6_planner/results.py`, `metrics.py` | results folders, logs and plan statistics |
+| `src/civ6_planner/dump.py`, `tacks.py` | reading map dumps out of saves; writing the plan for the mod |
+| `src/civ6_planner/viewer.py`, `dataset.py` | the HTML map page; test cases and masks |
+| `mod/mapdump/` | the Civ VI mod (Lua) |
+| `docs/model.html` | the model's maths |
+| `CLAUDE.md`, `.claude/skills/` | working notes for [Claude Code](https://claude.com/claude-code), with which this is developed |
 
-## Notes on the native Linux (Aspyr) port
+## Notes on the Linux (Aspyr) port
 
-Found while getting data out of the game; worth knowing before changing the mod:
+Found while getting data in and out of the game; worth knowing before changing the mod:
 
-- No `Lua.log` is ever written (even with `EnableTuner 1`), and `print()` output
-  goes nowhere visible.
-- `UIManager:SetClipboardString` doesn't reach the desktop clipboard.
-- The mod's own UI context (`AddUserInterfaces`) never runs. The working entry point
-  is `ReplaceUIScript` on `StatusMessagePanel` (`ui/mapdump_statusmessagepanel.lua`),
-  which includes the original panel script and then MapDump's.
-- What does work: `GameConfiguration.SetValue` (the value lands in the next save,
-  partly zlib-compressed), and `include()` of a mod file re-reads it from disk, which
-  is what lets Ctrl+Shift+T pick up a new plan mid-game.
+- No `Lua.log` is ever written, `print()` goes nowhere visible, and
+  `UIManager:SetClipboardString` doesn't reach the desktop clipboard.
+- A mod's own UI context (`AddUserInterfaces`) never runs. The working entry point is
+  `ReplaceUIScript` on `StatusMessagePanel`, which includes the original panel script.
+- What does work: `GameConfiguration.SetValue` (the value lands in the next save, partly
+  zlib-compressed) to get data out, and `include()` of a mod file (re-read from disk on
+  each call) to get a new plan in mid-game.
+- Deleting map pins inside a `GetMapPins()` loop crashes the game once there are a few
+  dozen: collect the ids first.
 - Use lowercase file names in mods.
 
-## Rules not yet modelled
+## Not modelled yet
 
-Districts: river/coast/hill requirements of other districts, geothermal fissures,
-"one per city", population limits, tiles shared with other cities' districts.
-Cities: the planner only sees revealed tiles, and doesn't avoid other civs' borders
-beyond tile ownership.
+Timing (which city grows when, what to build first), most adjacency between planned
+districts of different cities, technology- and civic-gated rules, tile ownership,
+other districts (Entertainment Complex, Government Plaza, Canal, ...), wonders. See
+the last section of [`docs/model.html`](docs/model.html).
+
+## Licence
+
+[MIT](LICENSE). Civilization VI is a trademark of Take-Two Interactive; this project is not
+affiliated with or endorsed by Firaxis Games or 2K.

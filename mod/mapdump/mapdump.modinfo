@@ -2,8 +2,8 @@
 <Mod id="e6e9d8be-2deb-47fc-b1fa-4544fe21a045" version="1">
   <Properties>
     <Name>Map Dump</Name>
-    <Description>Dumps every tile revealed to the local player. Ctrl+Shift+D copies the dump to the clipboard; it is also printed to Lua.log on builds that write one.</Description>
-    <Teaser>Dumps revealed map data.</Teaser>
+    <Description>Stores the map you have revealed in your saves for civ6-planner, and places its plan as map tacks. Ctrl+Shift+T: place the planned tacks; Ctrl+Shift+C: remove them; Ctrl+Shift+X: remove every tack; Ctrl+Shift+F: capture the whole map (test maps).</Description>
+    <Teaser>Map data out, planned tacks in, for civ6-planner.</Teaser>
     <Authors>Pierre</Authors>
     <AffectsSavedGames>0</AffectsSavedGames>
     <CompatibleVersions>1.2,2.0</CompatibleVersions>
