@@ -22,6 +22,31 @@ YIELDS = ["YIELD_FOOD", "YIELD_PRODUCTION", "YIELD_GOLD", "YIELD_SCIENCE", "YIEL
 
 
 @dataclass
+class Timing:
+    """The [timing] table: periods = 0 is the static model (everything at once). Speeds
+    are in turns; the model turns them into periods of turns_per_period turns."""
+    periods: int = 0
+    mode: str = "sequential"            # "sequential": where (static) then when; "joint": both at once
+    turns_per_period: int = 20
+    settlers_base: float = 1.0          # new cities per period on top of the per-city rate
+    turns_per_settler: float = 40.0     # turns one city needs to train a settler
+    turns_per_district: float = 20.0    # turns one city needs to build a district
+    turns_per_specialty: float = 30.0   # city age (turns) for each specialty district beyond the first
+    ring_delay_turns: tuple[float, ...] = (0, 0, 15, 35)   # by distance from the city: turns before usable
+    district_base_value: float = 4.0    # weighted yield per turn of a built district (its buildings)
+    build_speedup: tuple[float, ...] = ()   # per period, multiplies settler and district rates (empty: 1)
+
+    def delay(self, r: int) -> int:
+        """Periods after founding before a tile at distance r is usable (rounded up)."""
+        turns = self.ring_delay_turns[min(r, len(self.ring_delay_turns) - 1)]
+        return -int(-turns // self.turns_per_period)
+
+    def speedup(self, p: int) -> float:
+        """Rate multiplier in period p (1-based)."""
+        return self.build_speedup[p - 1] if p - 1 < len(self.build_speedup) else 1.0
+
+
+@dataclass
 class Config:
     n_cities: int | str            # a number, or "max": as many as fit
     districts: tuple[str, ...]     # district types, e.g. DISTRICT_CAMPUS
@@ -37,6 +62,7 @@ class Config:
     district_bonus: float
     weights: dict[str, float]      # YIELD_* -> value of one unit
     solver: dict[str, Any]         # scipy.optimize.milp options
+    timing: Timing = field(default_factory=Timing)          # periods = 0: static model
     sources: list[str] = field(default_factory=list)       # files read, in order
     raw: dict[str, Any] = field(default_factory=dict)      # the merged TOML, for logs
 
@@ -74,7 +100,20 @@ def load(*paths: str | None) -> Config:
         site_radius=o["site_radius"], loss_factor=o["loss_factor"],
         city_bonus=o["city_bonus"], district_bonus=o["district_bonus"],
         weights={"YIELD_" + k.upper(): float(v) for k, v in o["weights"].items()},
-        solver=dict(raw["solver"]), sources=files, raw=raw)
+        solver=dict(raw["solver"]), sources=files, raw=raw,
+        timing=_timing(raw["timing"]))
+
+
+def _timing(t: dict[str, Any]) -> Timing:
+    if t["mode"] not in ("sequential", "joint"):
+        raise ValueError(f"timing.mode must be sequential or joint, not {t['mode']!r}")
+    return Timing(periods=int(t["periods"]), mode=t["mode"], turns_per_period=int(t["turns_per_period"]),
+                  settlers_base=float(t["settlers_base"]), turns_per_settler=float(t["turns_per_settler"]),
+                  turns_per_district=float(t["turns_per_district"]),
+                  turns_per_specialty=float(t["turns_per_specialty"]),
+                  ring_delay_turns=tuple(float(v) for v in t["ring_delay_turns"]),
+                  district_base_value=float(t["district_base_value"]),
+                  build_speedup=tuple(float(v) for v in t["build_speedup"]))
 
 
 def _value(v: Any) -> str:

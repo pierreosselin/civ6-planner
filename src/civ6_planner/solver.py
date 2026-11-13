@@ -53,6 +53,11 @@ class Model:
         self.obj.append(obj)
         return name
 
+    def fix(self, name: Var, value: float) -> None:
+        """Fix a variable to a value (its bounds)."""
+        i = self.index[name]
+        self.lb[i] = self.ub[i] = value
+
     def add_obj(self, name: Var, coef: float) -> None:
         self.obj[self.index[name]] += coef
 

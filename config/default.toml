@@ -47,6 +47,26 @@ science = 2.0
 culture = 0.5
 faith = 0.5
 
+[timing]
+# When things are built. periods = 0: the static model (everything placed at once, each
+# yield counted once). periods > 0: a horizon of periods x turns_per_period turns; each
+# city and district gets the period it is founded/built in, counts from the next period
+# on, and the objective is the yield summed over the horizon (per-turn yields x turns).
+# Speeds are in turns (placeholders), converted to periods.
+periods = 0
+mode = "sequential"                # "sequential": the static model decides where, then the timed
+                                   # model decides when with those placements fixed (fast);
+                                   # "joint": where and when together (slow beyond small maps)
+turns_per_period = 20
+settlers_base = 1.0                # new cities per period, plus one per turns_per_settler per city
+turns_per_settler = 40.0           # turns a city needs to train a settler
+turns_per_district = 20.0          # turns a city needs to build a district
+turns_per_specialty = 30.0         # city age (turns) for each specialty district after the first
+ring_delay_turns = [0, 0, 15, 35]  # by distance from the city (0..3): turns before the tile is usable
+district_base_value = 4.0          # weighted yield per turn of a built district, for its buildings
+                                   # (adjacency alone is often below the covered tile's yields)
+build_speedup = []                 # per period, multiplies the settler and district rates (empty: 1)
+
 [solver]
 # Passed to HiGHS through scipy.optimize.milp(options=...). Also accepted:
 # presolve = true, node_limit = 1000. (disp is always on: the log is captured.)
