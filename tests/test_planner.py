@@ -309,6 +309,100 @@ class OptimiserTest(unittest.TestCase):
         self.assertTrue(metrics.format_metrics(m))
 
 
+def timed(periods=4, **timing):
+    """Default settings with the timed model on (periods > 0)."""
+    cfg = config.default()
+    return dataclasses.replace(cfg, timing=dataclasses.replace(cfg.timing, periods=periods, **timing))
+
+
+class TimingTest(unittest.TestCase):
+    def mountain_map(self):
+        """Food around (5, 6) (the city), three mountains next to (7, 6) (the Campus)."""
+        special = {(x, y): yields(food=2) for x in range(3, 8) for y in range(4, 9)}
+        base = full_map()
+        for n in base.neighbours(base.tiles[(7, 6)])[:3]:
+            special[(n["x"], n["y"])] = dict(MOUNTAIN)
+        return full_map(special)
+
+    def check_score(self, gmap, rules, plan):
+        score, _ = model.evaluate(gmap, rules, plan)
+        cfg = plan.config
+        expected = score + cfg.city_bonus * len(plan.cities) + cfg.district_bonus * len(plan.districts)
+        self.assertAlmostEqual(plan.info["objective"], expected, places=6)
+
+    def test_city_first_then_its_district_counted_over_the_turns(self):
+        gmap, rules = self.mountain_map(), Rules()
+        for mode in ("sequential", "joint"):
+            cfg = timed(3, mode=mode)
+            plan = model.optimise(gmap, rules, cfg, n_cities=1, districts=CAMPUS, improvements=())
+            [city] = plan.cities
+            [(_, campus, _)] = plan.districts
+            self.assertEqual((plan.timing[city], plan.timing[campus]), (1, 2), mode)
+            self.check_score(gmap, rules, plan)
+            # site value over 3 periods, the Campus (base + 3 science - covered tile) over 2
+            T = cfg.timing.turns_per_period
+            adj = cfg.weighted(rules.adjacency(gmap, gmap.tiles[campus], "DISTRICT_CAMPUS", {city: model.CITY_CENTER}))
+            value = (3 * T * model.site_value(gmap, gmap.tiles[city], cfg)
+                     + 2 * T * (cfg.timing.district_base_value + adj - cfg.loss_factor * cfg.weighted(gmap.tiles[campus])))
+            self.assertAlmostEqual(model.evaluate(gmap, rules, plan)[0], value)
+
+    def test_settlers_limit_cities_per_period(self):
+        # No settlers from cities (turns_per_settler huge): one new city per period, the
+        # rest after the horizon, best sites first.
+        gmap, rules = varied_map(), Rules()
+        for mode in ("sequential", "joint"):
+            cfg = timed(3, mode=mode, turns_per_settler=1e9)
+            plan = model.optimise(gmap, rules, cfg, n_cities="max", districts=(), improvements=())
+            periods = sorted(plan.timing[c] for c in plan.cities if c in plan.timing)
+            self.assertEqual(periods, [1, 2, 3], mode)
+            self.assertGreater(len(plan.cities), 3)
+            self.check_score(gmap, rules, plan)
+
+    def test_one_district_per_period_after_the_city(self):
+        special = {(x, y): yields(food=2) for x in range(3, 8) for y in range(4, 9)}
+        gmap, rules = full_map(special), Rules()
+        districts = ("DISTRICT_CAMPUS", "DISTRICT_HOLY_SITE", "DISTRICT_THEATER")
+        for mode in ("sequential", "joint"):
+            plan = model.optimise(gmap, rules, timed(5, mode=mode), n_cities=1, districts=districts, improvements=())
+            [city] = plan.cities
+            when = sorted(plan.timing[t] for _, t, _ in plan.districts if t in plan.timing)
+            self.assertTrue(when, mode)
+            self.assertEqual(len(when), len(set(when)), mode)      # one per period
+            self.assertGreater(min(when), plan.timing[city])
+
+    def test_specialty_districts_wait_for_population(self):
+        # Districts as fast as wanted, but a city's 2nd specialty district needs it to be
+        # 30 turns old, the 3rd 60: periods of 20 turns -> ready in periods 2, 3, 4 (joint:
+        # it also keeps them on near tiles, which the borders reach first; every tile is
+        # the same, so a far tile has nothing to make up for the wait).
+        gmap, rules = full_map({(x, y): yields(food=2) for x in range(W) for y in range(H)}), Rules()
+        districts = ("DISTRICT_CAMPUS", "DISTRICT_HOLY_SITE", "DISTRICT_THEATER")
+        cfg = dataclasses.replace(timed(5, mode="joint", turns_per_district=1.0), max_city_candidates=1)
+        plan = model.optimise(gmap, rules, cfg, n_cities=1, districts=districts, improvements=())
+        self.assertEqual(plan.info["status"], "optimal")
+        self.assertEqual(sorted(plan.timing[t] for _, t, _ in plan.districts), [2, 3, 4])
+
+    def test_far_tiles_wait_for_the_borders(self):
+        # Ring 3 is usable 35 turns (2 periods) after founding: a district there is ready
+        # in period 3 at the earliest, and nothing is ever earlier than its ring allows.
+        gmap, rules = varied_map(2), Rules()
+        cfg = timed(5, mode="joint", turns_per_district=1.0)
+        plan = model.optimise(gmap, rules, cfg, n_cities=2, districts=CAMPUS + ("DISTRICT_HOLY_SITE",),
+                              improvements=cfg.improvements)
+        for _, t, c in plan.districts:
+            if t in plan.timing:
+                r = gmap.distance(t, c)
+                self.assertGreaterEqual(plan.timing[t], plan.timing[c] + max(1, cfg.timing.delay(r)), (t, r))
+        self.assertEqual((cfg.timing.delay(1), cfg.timing.delay(2), cfg.timing.delay(3)), (0, 1, 2))
+
+    def test_tacks_and_metrics_show_the_period(self):
+        gmap, rules = self.mountain_map(), Rules()
+        plan = model.optimise(gmap, rules, timed(3, mode="joint"), n_cities=1, districts=CAMPUS, improvements=())
+        self.assertEqual(sorted(t.name for t in planner.to_tacks(gmap, rules, plan)), ["Campus C1 p2", "City C1 p1"])
+        rows = metrics.plan_metrics(gmap, rules, plan)["timing"]["periods"]
+        self.assertEqual([(r["cities"], r["districts"]) for r in rows], [(1, 0), (0, 1), (0, 0)])
+
+
 class ImprovementTest(unittest.TestCase):
     def test_placement_rules(self):
         gmap = full_map({(3, 3): {"terrain": "TERRAIN_PLAINS_HILLS"},
@@ -557,6 +651,10 @@ class ConfigTest(unittest.TestCase):
 
     def test_case_template_is_empty_settings(self):
         self.assertEqual(config.load(self.write(dataset.CONFIG_TEMPLATE)).raw, config.default().raw)
+
+    def test_timing_mode_is_checked(self):
+        with self.assertRaises(ValueError):
+            config.load(self.write("[timing]\nmode = \"both\"\n"))
 
     def test_unknown_setting_is_an_error(self):
         with self.assertRaises(KeyError):

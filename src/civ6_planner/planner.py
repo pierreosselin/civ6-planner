@@ -10,6 +10,7 @@ first stub, kept to compare against:
 from __future__ import annotations
 
 import random
+from typing import Callable
 from dataclasses import dataclass, field
 
 from . import config, model
@@ -91,6 +92,7 @@ def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
     if not p.cities and not p.districts and not p.improvements:
         return [f"{method}: nothing to place: no city site and no district spot ({p.info.get('status')})"]
     label = city_labels(gmap, p)
+    when = period_labels(p)
     score, parts = model.evaluate(gmap, rules, p)
     notes.append(f"{method}: score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
                  f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}")
@@ -99,11 +101,11 @@ def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
         notes.append(f"HiGHS {i['status']} in {i['seconds']}s: {i['variables']} variables, {i['rows']} rows, "
                      f"{i['city_candidates']} city sites considered")
     for xy in p.cities:
-        notes.append(f"city {label[xy]} at {xy}: {gmap.tiles[xy]['terrain']}, "
+        notes.append(f"city {label[xy]}{when(xy)} at {xy}: {gmap.tiles[xy]['terrain']}, "
                      f"site value {model.site_value(gmap, gmap.tiles[xy], p.config):.1f}")
     for d, xy, city in p.districts:
         adj = ", ".join(f"+{v} {y[6:].lower()}" for y, v in _district_yields(gmap, rules, p, d, xy).items())
-        notes.append(f"{district_name(d).lower()} of {label[city]} at {xy}: {gmap.tiles[xy]['terrain']}, "
+        notes.append(f"{district_name(d).lower()} of {label[city]}{when(xy)} at {xy}: {gmap.tiles[xy]['terrain']}, "
                      f"{adj or 'no adjacency'}")
     for imp, xy, city in p.improvements:
         gain = ", ".join(f"+{v} {y[6:].lower()}" for y, v in rules.improvements[imp].yields.items())
@@ -138,13 +140,23 @@ def _district_yields(gmap: GameMap, rules: Rules, p: Plan, district: str, xy: XY
     return rules.adjacency(gmap, gmap.tiles[xy], district, planned, improved)
 
 
+def period_labels(p: Plan) -> Callable[[XY], str]:
+    """For timed plans, a suffix per city/district tile: " p2" (built in period 2) or
+    " later" (after the horizon); "" for static plans."""
+    if not (p.config.timing.periods and (p.timing or p.info.get("where"))):
+        return lambda xy: ""
+    return lambda xy: f" p{p.timing[xy]}" if xy in p.timing else " later"
+
+
 def to_tacks(gmap: GameMap, rules: Rules, p: Plan) -> list[Tack]:
     """City tacks named "City C1", district tacks "Campus C1" (or "Campus Rome" for one
-    of the player's cities), so it's clear which city a district belongs to."""
+    of the player's cities), so it's clear which city a district belongs to. Timed
+    plans add the period: "Campus C1 p3", or "later" after the horizon."""
     label = city_labels(gmap, p)
-    tacks = [Tack(x, y, CITY_ICON, f"City {label[(x, y)]}") for x, y in p.cities]
+    when = period_labels(p)
+    tacks = [Tack(x, y, CITY_ICON, f"City {label[(x, y)]}{when((x, y))}") for x, y in p.cities]
     for d, (x, y), city in p.districts:
-        tacks.append(Tack(x, y, "ICON_" + d, f"{district_name(d)} {label[city]}",
+        tacks.append(Tack(x, y, "ICON_" + d, f"{district_name(d)} {label[city]}{when((x, y))}",
                           _district_yields(gmap, rules, p, d, (x, y))))
     for i, (x, y), city in p.improvements:
         tacks.append(Tack(x, y, "ICON_" + i, f"{improvement_name(i)} {label[city]}",

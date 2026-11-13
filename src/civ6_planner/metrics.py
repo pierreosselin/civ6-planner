@@ -77,7 +77,23 @@ def plan_metrics(gmap: GameMap, rules: Rules, plan: Plan) -> dict[str, Any]:
         },
         "improvements_by_type": itypes,
         "spacing": city_spacing(gmap, plan, cities),
+        **({"timing": timing(plan)} if plan.config.timing.periods and plan.timing is not None
+           and (plan.cities or plan.districts) else {}),
     }
+
+
+def timing(plan: Plan) -> dict[str, Any]:
+    """Timed plans: new cities founded and districts built per period (turns from-to),
+    and how many come after the horizon."""
+    tm = plan.config.timing
+    rows = []
+    for p in range(1, tm.periods + 1):
+        rows.append({"period": p, "turns": [(p - 1) * tm.turns_per_period + 1, p * tm.turns_per_period],
+                     "cities": sum(1 for c in plan.cities if plan.timing.get(c) == p),
+                     "districts": sum(1 for _, t, _ in plan.districts if plan.timing.get(t) == p)})
+    return {"periods": rows,
+            "later": {"cities": sum(1 for c in plan.cities if c not in plan.timing),
+                      "districts": sum(1 for _, t, _ in plan.districts if t not in plan.timing)}}
 
 
 def _stats(values: list[int] | list[float]) -> dict[str, float]:
@@ -136,6 +152,12 @@ def format_summary(m: dict[str, Any]) -> list[str]:
             for i, t in m.get("improvements_by_type", {}).items()]
     if imps:
         lines += ["  improvements: share of cities (count)"] + _wrap(imps)
+    if m.get("timing"):
+        t = m["timing"]
+        per = " · ".join(f"p{r['period']} (turns {r['turns'][0]}-{r['turns'][1]}) {r['cities']}c {r['districts']}d"
+                         for r in t["periods"])
+        lines += ["  timing: new cities (c) and districts (d) per period", *_wrap(per.split(" · ")),
+                  f"    after the horizon: {t['later']['cities']} cities, {t['later']['districts']} districts"]
     s = m.get("spacing", {})
     if s.get("nearest_city"):
         nc, ap = s["nearest_city"], s["all_pairs"]
