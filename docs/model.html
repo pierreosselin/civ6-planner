@@ -55,6 +55,7 @@ checked against each other. Defaults are those of <code>config/default.toml</cod
   <li><a href="#score">Score and evaluation</a></li>
   <li><a href="#parameters">Parameters</a></li>
   <li><a href="#solving">Solving, size and times</a></li>
+  <li><a href="#timing">Timing (optional)</a></li>
   <li><a href="#limits">Not modelled</a></li>
 </ol></nav>
 
@@ -452,6 +453,14 @@ the values used.</p>
   <tr><td>\(\lambda\)</td><td><code>objective.loss_factor</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
   <tr><td>\(\beta_C\)</td><td><code>objective.city_bonus</code></td><td>100</td><td>Per new city</td></tr>
   <tr><td>\(\beta_D\)</td><td><code>objective.district_bonus</code></td><td>10</td><td>Per district</td></tr>
+  <tr><td>\(P\), \(T\)</td><td><code>timing.periods</code>, <code>timing.turns_per_period</code></td><td>0 (off), 20</td><td>Timed model (§15): periods and their length</td></tr>
+  <tr><td></td><td><code>timing.mode</code></td><td><code>"sequential"</code></td><td>Where then when, or <code>"joint"</code></td></tr>
+  <tr><td>\(a\)</td><td><code>timing.settlers_base</code>, <code>turns_per_settler</code></td><td>1, 40</td><td>New cities per period: \(a\) + one per city per 40 turns</td></tr>
+  <tr><td>\(\kappa\)</td><td><code>timing.turns_per_district</code></td><td>20</td><td>Turns a city needs per district</td></tr>
+  <tr><td></td><td><code>timing.turns_per_specialty</code></td><td>30</td><td>City age (turns) per further specialty district</td></tr>
+  <tr><td>\(\Delta_r\)</td><td><code>timing.ring_delay_turns</code></td><td>0, 0, 15, 35</td><td>Turns before a tile at distance 0–3 is usable</td></tr>
+  <tr><td>\(\gamma\)</td><td><code>timing.district_base_value</code></td><td>4</td><td>Per-turn value of a built district (its buildings)</td></tr>
+  <tr><td>\(s_p\)</td><td><code>timing.build_speedup</code></td><td>empty (1)</td><td>Per-period rate multiplier</td></tr>
   <tr><td></td><td><code>solver.time_limit</code>, <code>solver.mip_rel_gap</code></td><td>60 s, \(10^{-6}\)</td><td>HiGHS limits; any other <code>scipy.optimize.milp</code> option may go in <code>[solver]</code></td></tr>
   <tr><td>\(\rho\), \(\rho_D\)</td><td>game database</td><td>3, 3</td><td><code>CITY_MIN_RANGE</code>, <code>CITY_MAX_BUY_PLOT_RANGE</code></td></tr>
 </table>
@@ -492,7 +501,83 @@ city (an Industrial Zone in every city, a Campus in 80%, an Aqueduct in 73%, a H
 Farms (18%). Logs: <code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code>.
 A live game's revealed area is the size of the first rows: under a second.</p>
 
-<h2 id="limits">15. Not modelled</h2>
+<h2 id="timing">15. Timing (optional) · <code>[timing]</code></h2>
+<p>With <code>timing.periods</code> \(P>0\) (<code>config/timing.toml</code> sets 6), the plan also says <b>when</b>: the
+horizon is \(P\) periods of \(T\) turns (<code>turns_per_period</code>, 20). A city or district gets the period
+\(p\) it is ready in and counts from then on, \(T(P-p+1)\) turns; the objective is the yield summed over the horizon. A
+placement may also come <b>after the horizon</b> (no period; tacks say <code>later</code>): it then counts only its
+placement bonus. With \(P=0\) (the default) everything above is unchanged.</p>
+
+<h3>Variables · <code>timing_vars</code></h3>
+<p>"Where" stays in \(x, z, \omega\) (and \(y, q\)); "when" is added per city and per (district, city), with no tile
+index, so the model grows by a few variables per city and period:</p>
+<div class="def"><b>\(f_{c,p}\in\{0,1\}\)</b>: new city \(c\) founded (ready) in period \(p\).
+\(F_{c,p}=\sum_{q\le p} f_{c,q}\) (founded by \(p\)); \(F_{e,p}=1\) for the player's cities \(e\in E\), \(p\ge 0\).</div>
+<div class="def"><b>\(b_{d,c,p}\in\{0,1\}\)</b>: city \(c\)'s district \(d\) ready by period \(p\).</div>
+<div class="def"><b>\(u_{d,c,p}\in[-\Lambda_{d,c},\,M_{d,c}]\)</b>: that district's net yield per turn counted in period \(p\).</div>
+<div class="def"><b>\(\omega^{p}_{i,c,t}\in[0,1]\)</b>: improvement option \(\omega_{i,c,t}\) of a new city founded in \(p\).</div>
+
+<h3>Constraints</h3>
+<h3><span class="tag">(T1)</span>Links · <code>timing_link</code></h3>
+$$ \sum_p f_{c,p}\le x_c,\qquad b_{d,c,p-1}\le b_{d,c,p},\qquad b_{d,c,P}\le\sum_{t} z_{d,c,t},\qquad
+\sum_p \omega^p_{i,c,t}\le \omega_{i,c,t},\quad \omega^p_{i,c,t}\le f_{c,p}. $$
+<p class="muted">\(\le\) rather than \(=\): what the horizon can't fit comes after it. \(\omega^p\le f_{c,p}\) ties an
+improvement to its city's founding period exactly (no big-M; \(f\) is binary).</p>
+<h3><span class="tag">(T2)</span>Settlers · <code>settler_capacity</code></h3>
+$$ \sum_{c}F_{c,p}\;\le\;N_p,\qquad N_p = N_{p-1}+\big\lfloor a + k_p\,(|E| + N_{p-1})\big\rfloor,\quad N_0=0,\quad
+k_p=\tfrac{T}{\texttt{turns\_per\_settler}}\,s_p . $$
+<p class="muted">\(a\) = <code>settlers_base</code> (1), <code>turns_per_settler</code> 40, \(s_p\) = <code>build_speedup</code>
+(1 when empty). The schedule assumes each period founded as many as it could: with no existing city, at most
+1, 2, 4, 7, 11, 17 cities by the end of periods 1–6. (A first form, new cities in \(p\le a+k_p\cdot\)(cities founded
+before), kept the solver searching which cities come first; the cumulative bound is simpler and as tight.)</p>
+<h3><span class="tag">(T3)</span>District after its city · <code>district_after_city</code></h3>
+$$ b_{d,c,p}\;\le\;F_{c,p-1}\qquad (c\in C). $$
+<h3><span class="tag">(T4)</span>Build rate · <code>build_capacity</code></h3>
+$$ \sum_d \big(b_{d,c,p}-b_{d,c,p-1}\big)\;\le\;\kappa_p\,F_{c,p-1},\qquad \kappa_p=\tfrac{T}{\texttt{turns\_per\_district}}\,s_p . $$
+<p class="muted"><code>turns_per_district</code> 20: one district per city per period.</p>
+<h3><span class="tag">(T5)</span>Population by age · <code>population_by_age</code></h3>
+$$ \sum_{d\in D^{\text{pop}}} b_{d,c,p}\;\le\;\sum_{q<p}\operatorname{cap}(p-q)\,f_{c,q},\qquad
+\operatorname{cap}(a)=\min\!\Big(K,\;1+\big\lfloor a\,T/\texttt{turns\_per\_specialty}\big\rfloor\Big) . $$
+<p class="muted">A city's 2nd specialty district once it is 30 turns old, its 3rd at 60 (<code>turns_per_specialty</code> 30),
+standing in for population growth. Existing cities keep (8).</p>
+<h3><span class="tag">(T6)</span>Borders · <code>ring_delay</code></h3>
+$$ b_{d,c,p}+\sum_{t\in R_{d,c},\ \delta(c,t)=r} z_{d,c,t}-F_{c,\,p-\Delta_r}\;\le\;1\qquad(\Delta_r\ge 2,\ c\in C). $$
+<p class="muted">A tile at distance \(r\) is usable \(\Delta_r=\lceil\texttt{ring\_delay\_turns}[r]/T\rceil\) periods after
+founding (turns 0, 0, 15, 35 for \(r=0..3\): \(\Delta\) = 0, 0, 1, 2), so a district there is ready in
+\(p\ge p_c+\max(1,\Delta_r)\). Improvements count from \(p_c+\Delta_r\) (in the objective). The player's existing cities
+already have their borders.</p>
+<h3><span class="tag">(T7)</span>District yield once built · <code>timed_value_link</code></h3>
+$$ u_{d,c,p}\;\le\;A_{d,c}+\Lambda_{d,c}\,(1-b_{d,c,p}),\qquad u_{d,c,p}\;\le\;M_{d,c}\,b_{d,c,p}, $$
+$$ A_{d,c}=\sum_t\big(\gamma + a_{d,c,t}-\lambda\,v(t)\big)\,z_{d,c,t}+\sum v_{d,d'}\,y_{d,d',c,t}+\sum v_{d,i}\,q_{d,i,c,u} . $$
+<p class="muted">\(\gamma\) = <code>district_base_value</code> (4: a district's buildings, e.g. +2 science from a Library at
+weight 2; without it most districts' adjacency is below the yields of the tile they cover, and the model put them off
+past the horizon). \(M_{d,c}\) = the largest \(A\), \(\Lambda_{d,c}\) = the largest covered-tile loss: maximising makes
+\(u=A\) once built and \(0\) before.</p>
+
+<h3>Objective (replaces the terms of §8)</h3>
+$$ \max\; T\sum_{c,p}(P-p+1)\,s_c f_{c,p} \;+\; T\sum_{d,c,p}u_{d,c,p}
+\;+\;T\sum_{i,c,t,p}\big(P-p-\Delta_{\delta(c,t)}+1\big)^{+}\,g_{i,t}\,\omega^p_{i,c,t}
+\;+\;T P\sum_{i,e,t} g_{i,t}\,\omega_{i,e,t}\;+\;\beta_C\sum_c x_c+\beta_D\sum z . $$
+<p class="muted">\(g_{i,t}\) = the improvement's value (§8). The bonuses stay one-off. <code>evaluate()</code> scores a timed
+plan the same way (§12).</p>
+
+<h3>Solving: sequential or joint · <code>timing.mode</code></h3>
+<ul>
+  <li><b><code>sequential</code></b> (default): solve the static model (where), then the timed model with \(x, z, \omega\)
+  fixed to that plan (when). Presolve leaves a small scheduling problem: <b>0.1–2.3 s</b> on every test map, optimal, on
+  top of the static solve. The places don't know about timing (e.g. a ring-1 tile that could be built earlier).</li>
+  <li><b><code>joint</code></b>: where and when together. Better plans in principle (11% more on a 10&times;12 test map),
+  but HiGHS's heuristics barely find plans: on the radius-6 maps it stops at the 60 s limit with plans far from its bound
+  (2,680 and 17,230 against bounds of about 81,000). Those bounds also say the sequential plans (74,645 and 74,135)
+  are within about 8% of the best joint plan. A way forward is to give the joint model the sequential plan as a start
+  (needs <code>highspy</code>; <code>scipy.optimize.milp</code> can't pass one).</li>
+</ul>
+<p class="muted">Sequential on the test maps (6 periods of 20 turns): the schedule is the binding limit, as expected.
+New cities per period 1, 1, 2, 3, 4, 6 (17 within 120 turns); on radius-6, 24 of 48 districts come after the horizon;
+on the full shuffle map, 61 of 78 cities and 186 districts. Placement and tile ownership are still those of the static
+model (§16).</p>
+
+<h2 id="limits">16. Not modelled</h2>
 <ul>
   <li><b>Adjacency between planned districts</b>, beyond a district and its own city centre and the one-tile neighbour
   bonuses of §7 within a city (Industrial Zone–Aqueduct, Commercial Hub–Harbor): the "+1 per 2 districts" rules,
@@ -510,7 +595,11 @@ A live game's revealed area is the size of the first rows: under a second.</p>
   adjacency, removing a feature to improve a tile, and builder charges are not modelled; only each city's best \(J\)
   options are considered; a district-improvement bonus counts only the city's own improvements.</li>
   <li><b>Population over time.</b> Every city gets the same \(K\) specialty districts; in the game the limit grows with
-  population, and which city grows how big (food, housing) is not modelled.</li>
+  population, and which city grows how big (food, housing) is not modelled. The timed model (§15) lets the limit grow
+  with a city's age, the same for every city.</li>
+  <li><b>Timing</b> (§15, optional): coarse periods; fixed rates (no production, gold purchases, chops); a settler costs
+  nothing to its city; the covered tile's loss counts from when the district is ready; builders and technologies don't
+  limit improvements; in sequential mode, the places are chosen without the timing.</li>
   <li><b>Site value is a proxy.</b> No housing (fresh water, coast), amenities, growth over time or future improvements;
   sites of cities 4 apart can count the same tile twice.</li>
   <li><b>Aqueduct and Dam housing</b>: their own value (housing, and the Dam's flood protection) is not counted; they

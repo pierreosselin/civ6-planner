@@ -150,7 +150,8 @@ Found while getting data in and out of the game; worth knowing before changing t
 
 ## Not modelled yet
 
-Timing (which city grows when, what to build first), most adjacency between planned
+Detailed timing (an optional coarse version, `config/timing.toml`, says in which 20-turn
+period each city and district comes), most adjacency between planned
 districts of different cities, technology- and civic-gated rules, tile ownership,
 other districts (Entertainment Complex, Government Plaza, Canal, ...), wonders. See
 the last section of [`docs/model.html`](docs/model.html).

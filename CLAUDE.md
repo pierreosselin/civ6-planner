@@ -26,7 +26,13 @@ city candidates the six original cases solve to optimal in ~67 s in total (full 
 11–32 s; city spacing written as clique constraints, which made that possible). With all
 sites (the full maps' configs) and on the radius-18 maps they reach the 60 s limit: gaps
 0.016% (continents), 1.24% (shuffle-radius18), 16.5% (shuffle: one rounding plan at 11.5 s,
-then nothing; needs more time or a starting plan). Kept simple on purpose: other adjacency
+then nothing; needs more time or a starting plan). Optional timing (`[timing]`, off by default; `config/timing.toml` sets 6 periods of 20
+turns): each city and district gets the period it is ready in (`Plan.timing`, tacks
+"Campus C1 p3" or "later"), under settler, build-rate, population-by-age and border
+limits, and the objective sums yields over the horizon. `mode = "sequential"` (default)
+solves the static model, then the timing with those placements fixed (0.1–2.3 s);
+`"joint"` decides both at once but stalls at the time limit on real maps.
+Kept simple on purpose: other adjacency
 between *planned* districts ("+1 per 2 districts", across cities) isn't modelled
 yet, because general coupling constraints made HiGHS slow.
 
