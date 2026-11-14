@@ -453,11 +453,11 @@ the values used.</p>
   <tr><td>\(\lambda\)</td><td><code>objective.loss_factor</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
   <tr><td>\(\beta_C\)</td><td><code>objective.city_bonus</code></td><td>100</td><td>Per new city</td></tr>
   <tr><td>\(\beta_D\)</td><td><code>objective.district_bonus</code></td><td>10</td><td>Per district</td></tr>
-  <tr><td>\(P\)</td><td><code>timing.periods</code>, <code>timing.horizon_turns</code></td><td>0 (off), 120</td><td>Timed model (§15): periods over the horizon, \(T=120/P\)</td></tr>
+  <tr><td>\(H\), \(\Theta\)</td><td><code>timing.periods</code>, <code>timing.horizon_turns</code></td><td>0 (off), 120</td><td>Timed model (§15): periods over the horizon, \(\theta=\Theta/H\) turns each</td></tr>
   <tr><td></td><td><code>timing.mode</code></td><td><code>"joint"</code></td><td>Where and when together (from the sequential plan), or <code>"sequential"</code></td></tr>
-  <tr><td>\(N_p\)</td><td><code>timing.settlers_at_start</code>, <code>turns_per_settler</code></td><td>1, 40</td><td>Settler schedule</td></tr>
-  <tr><td>\(\kappa\)</td><td><code>timing.turns_per_district</code></td><td>20</td><td>Turns a city needs per district</td></tr>
-  <tr><td>\(\Delta_r\)</td><td><code>timing.ring_delay_turns</code></td><td>0, 0, 15, 35</td><td>Turns before a tile at distance 0–3 is usable</td></tr>
+  <tr><td>\(n_{\text{start}}\), \(\theta_S\)</td><td><code>timing.settlers_at_start</code>, <code>turns_per_settler</code></td><td>1, 40</td><td>Settler schedule \(\bar n_p\)</td></tr>
+  <tr><td>\(\theta_D\)</td><td><code>timing.turns_per_district</code></td><td>20</td><td>Turns a city needs per district</td></tr>
+  <tr><td>\(\theta_r\)</td><td><code>timing.ring_delay_turns</code></td><td>0, 0, 15, 35</td><td>Turns before a tile at distance 0–3 is usable (\(\nu_r=\lfloor\theta_r/\theta\rfloor\) periods)</td></tr>
   <tr><td></td><td><code>solver.time_limit</code>, <code>solver.mip_rel_gap</code></td><td>60 s, \(10^{-6}\)</td><td>HiGHS limits; any other <code>scipy.optimize.milp</code> option may go in <code>[solver]</code></td></tr>
   <tr><td>\(\rho\), \(\rho_D\)</td><td>game database</td><td>3, 3</td><td><code>CITY_MIN_RANGE</code>, <code>CITY_MAX_BUY_PLOT_RANGE</code></td></tr>
 </table>
@@ -499,63 +499,138 @@ Farms (18%). Logs: <code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code
 A live game's revealed area is the size of the first rows: under a second.</p>
 
 <h2 id="timing">15. Timing (optional) · <code>[timing]</code></h2>
-<p>With <code>timing.periods</code> \(P>0\) (<code>config/timing.toml</code> sets 6), the plan also says <b>when</b>. The
-horizon of <code>horizon_turns</code> (120) turns is cut into \(P\) periods of \(T=120/P\) turns. Each city and district
-gets the period \(p\) it is ready in, and the objective is <b>the static objective minus what is lost by being late</b>:
-something ready in period \(p\) loses \((p-1)/P\) of its value, 1/P for each period it isn't there. A placement may
-also come <b>after the horizon</b> (no period, tacks say <code>later</code>): it loses all of its value, as if ready in
-period \(P+1\).</p>
-<div class="note"><b>One period gives the static plan.</b> Every timing rule allows the same period (a district in its
-city's period, a tile as soon as its delay in whole periods allows) and delays round down, so with \(P=1\) nothing is
-late and the lateness terms are all 0: the model is the static one plus horizon totals (at most \(N_1\) cities from the
-settler schedule, at most 120/20 = 6 districts per city, never binding as a city has at most 5). With settlers to
-spare, the objective equals the static one exactly (test <code>test_one_period_is_the_static_model</code>). More periods
-let timing move placements: a tile that can be ready sooner loses less.</div>
+<p>With <code>timing.periods</code> \(H>0\) (<code>config/timing.toml</code> sets 6) the plan also says <b>when</b> each
+city and district is ready. The objective is <b>the static objective \(f\) of §8 minus the value lost by being late</b>,
+written so that one period (\(H=1\)) is exactly the static model (Proposition 2). Code names are given with each symbol.</p>
+
+<h3>Time</h3>
+<div class="def"><b>Horizon</b> \(\Theta\) turns (<code>horizon_turns</code>, 120), cut into \(H\) periods
+\(\mathcal H=\{1,\dots,H\}\) of \(\theta=\Theta/H\) turns (<code>turns_per_period</code>). Period \(p\) covers turns
+\((p-1)\theta+1\) to \(p\theta\).</div>
+<div class="def"><b>Border delay</b> of a tile at distance \(r\) from its city, in whole periods, rounded down:
+\(\nu_r=\lfloor\theta_r/\theta\rfloor\), with \(\theta_r\) = <code>ring_delay_turns</code>\([r]\) = 0, 0, 15, 35 for
+\(r=0,\dots,3\). (\(\theta=20\): \(\nu=0,0,0,1\).) <code>Timing.delay</code></div>
+<div class="def"><b>Settler schedule</b> \(\bar n_p\): the most new cities founded by the end of period \(p\), simulated
+turn by turn so it doesn't depend on \(H\). With \(n_0=n_{\text{start}}\) (<code>settlers_at_start</code>, 1),
+\(g_0=0\) and \(\theta_S\) = <code>turns_per_settler</code> (40), for \(\tau=1,\dots,\Theta\):
+$$ g_\tau = g_{\tau-1}-\lfloor g_{\tau-1}\rfloor+\frac{|E|+n_{\tau-1}}{\theta_S},\qquad n_\tau=n_{\tau-1}+\lfloor g_\tau\rfloor,\qquad
+\bar n_p = n_{\lceil p\theta\rceil}. $$
+(The leftover \(g-\lfloor g\rfloor\) carries over.) With \(E=\emptyset\): 11 new cities by turn 120.
+<code>settler_schedule</code></div>
+<div class="def"><b>Build rate</b> \(\theta/\theta_D\) districts per city per period, \(\theta_D\) =
+<code>turns_per_district</code> (20).</div>
 
 <h3>Variables · <code>timing_vars</code></h3>
-<p>"Where" stays in \(x, z, \omega\) (and \(y, q\)); "when" is added per city and per (district, city), with no tile index:</p>
-<div class="def"><b>\(f_{c,p}\in\{0,1\}\)</b>: new city \(c\) founded (ready) in period \(p\).
-\(F_{c,p}=\sum_{q\le p} f_{c,q}\) (founded by \(p\)); \(F_{e,p}=1\) for the player's cities \(e\in E\).</div>
-<div class="def"><b>\(b_{d,c,p}\in\{0,1\}\)</b>: city \(c\)'s district \(d\) ready by period \(p\).</div>
-<div class="def"><b>\(\ell_{d,c,p}\in[0,M_{d,c}]\)</b>: the district's value still missing in period \(p\).</div>
-<div class="def"><b>\(r_{i,c,t,p}\in[0,1]\)</b>: improvement option \(\omega_{i,c,t}\) of a new city in use by period \(p\).</div>
+<p>The static variables \(x, z, \omega, y, q\) keep their meaning ("where"). "When" is added per city and per
+(district, city), with no tile index:</p>
+<table>
+  <tr><th>Variable</th><th>Domain</th><th>Index</th><th>Meaning</th><th>Code</th></tr>
+  <tr><td>\(\phi_{c,p}\)</td><td>\(\{0,1\}\)</td><td>\(c\in C,\ p\in\mathcal H\)</td><td>new city \(c\) founded (ready) in period \(p\)</td><td><code>f</code></td></tr>
+  <tr><td>\(\psi_{d,c,p}\)</td><td>\(\{0,1\}\)</td><td>\((d,c)\) with \(R_{d,c}\ne\emptyset\), \(c\in C\cup E\), \(p\in\mathcal H\)</td><td>city \(c\)'s district \(d\) ready <b>by</b> period \(p\)</td><td><code>b</code></td></tr>
+  <tr><td>\(\chi_{d,c,p}\)</td><td>\([0,\bar A_{d,c}]\)</td><td>same, where \(\bar A_{d,c}>0\)</td><td>the district's value still missing in period \(p\)</td><td><code>late</code></td></tr>
+  <tr><td>\(\gamma_{i,c,t,p}\)</td><td>\([0,1]\)</td><td>\((i,c,t)\in Q,\ c\in C,\ p\ge 1+\nu_{\delta(c,t)}\)</td><td>improvement option \(\omega_{i,c,t}\) in use by period \(p\)</td><td><code>ready</code></td></tr>
+</table>
+<p>Shorthand: \(\Phi_{c,p}=\sum_{q=1}^{p}\phi_{c,q}\) (founded by \(p\); \(\Phi_{c,p}=0\) for \(p\le 0\)) for \(c\in C\), and
+\(\Phi_{e,p}=1\) for \(e\in E\), \(p\ge0\) (the player's cities exist). The district's static value on the tile \(z\)
+picked, with its bonus, and an upper bound on it:</p>
+$$ A_{d,c} \;=\; \sum_{t\in R_{d,c}}\big(\beta_D+a_{d,c,t}-\lambda v(t)\big)\,z_{d,c,t} \;+\; \sum_{d',t} b_{d,d'}\,y_{d,d',c,t}
+\;+\; \sum_{i,u} e_{d,i}\,q_{d,i,c,u}, $$
+$$ \bar A_{d,c} \;=\; \max_{t\in R_{d,c}}\big(\beta_D+a_{d,c,t}-\lambda v(t)\big) \;+\; \sum_{d'} b_{d,d'} \;+\; L_c\sum_{i} e_{d,i}, $$
+<p class="muted">sums over the \(y\), \(q\) variables that exist for \((d,c)\); \(L_c\) = the improvements city \(c\) may still
+get (\(L\), or \(L-\ell_e\)). By (3) at most one \(z_{d,c,\cdot}\) is 1, and (6), (10) bound the bonus terms, so
+\(A_{d,c}\le\bar A_{d,c}\). <code>_district_value</code></p>
 
 <h3>Constraints</h3>
+<p>All for \(p\in\mathcal H\) (with \(\psi_{d,c,0}=0\)).</p>
 <h3><span class="tag">(T1)</span>Links · <code>timing_link</code></h3>
-$$ \sum_p f_{c,p}\le x_c,\qquad b_{d,c,p-1}\le b_{d,c,p},\qquad b_{d,c,P}\le\sum_t z_{d,c,t}. $$
-<p class="muted">\(\le\): what has no period comes after the horizon. Any placement then has a schedule (all after the
-horizon), which HiGHS's heuristics need: with \(=\) they found almost no plans.</p>
+$$ \sum_{p\in\mathcal H}\phi_{c,p}\le x_c\quad(c\in C),\qquad \psi_{d,c,p-1}\le\psi_{d,c,p},\qquad
+\psi_{d,c,H}\le\sum_{t\in R_{d,c}} z_{d,c,t}. $$
+<p class="muted">A city has at most one period, a district is ready only if placed and stays ready. \(\le\) rather than
+\(=\): a placement with no period comes <b>after the horizon</b> (tacks: <code>later</code>). Then every placement has a
+schedule (all after the horizon), which HiGHS's heuristics need: with \(=\) they found almost no plans.</p>
 <h3><span class="tag">(T2)</span>Settlers · <code>settler_capacity</code></h3>
-$$ \sum_c F_{c,p}\;\le\;N_p . $$
-<p class="muted">\(N_p\): new cities by the end of period \(p\), simulated turn by turn (so it doesn't depend on \(P\)):
-<code>settlers_at_start</code> (1) at once, then every city, existing or new, trains one settler per
-<code>turns_per_settler</code> (40) turns. With no existing city: 11 new cities by turn 120.</p>
+$$ \sum_{c\in C}\Phi_{c,p}\;\le\;\bar n_p . $$
 <h3><span class="tag">(T3)</span>District with or after its city · <code>district_after_city</code></h3>
-$$ b_{d,c,p}\;\le\;F_{c,p}\qquad (c\in C). $$
+$$ \psi_{d,c,p}\;\le\;\Phi_{c,p}\qquad(c\in C). $$
 <h3><span class="tag">(T4)</span>Build rate · <code>build_capacity</code></h3>
-$$ \sum_d b_{d,c,p}\;\le\;\kappa\sum_{q\le p}(p-q+1)\,f_{c,q}\quad(c\in C),\qquad \sum_d b_{e,d,p}\le\kappa\,p\quad(e\in E),\qquad
-\kappa=T/\texttt{turns\_per\_district} . $$
-<p class="muted">One district per city per 20 turns since its founding, that period included.</p>
+$$ \sum_{d}\psi_{d,c,p}\;\le\;\frac{\theta}{\theta_D}\sum_{q=1}^{p}(p-q+1)\,\phi_{c,q}\quad(c\in C),\qquad
+\sum_{d}\psi_{d,e,p}\;\le\;\frac{\theta}{\theta_D}\,p\quad(e\in E). $$
+<p class="muted">A city founded in period \(q\) has \(p-q+1\) periods by the end of \(p\) (its founding period included),
+so at most \(\theta/\theta_D\) districts per period since then.</p>
 <h3><span class="tag">(T5)</span>Borders · <code>ring_delay</code></h3>
-$$ b_{d,c,p}+\sum_{t\in R_{d,c},\ \delta(c,t)=r} z_{d,c,t}-F_{c,\,p-\Delta_r}\;\le\;1\qquad(\Delta_r\ge 1,\ c\in C). $$
-<p class="muted">\(\Delta_r=\lfloor\texttt{ring\_delay\_turns}[r]/T\rfloor\) (turns 0, 0, 15, 35 for \(r=0..3\); with
-\(T=20\): 0, 0, 0, 1). Rounded down, so one long period has no delay.</p>
+$$ \psi_{d,c,p}+\sum_{t\in R_{d,c}:\ \delta(c,t)=r} z_{d,c,t}\;-\;\Phi_{c,\,p-\nu_r}\;\le\;1
+\qquad(c\in C,\ r\ \text{with}\ \nu_r\ge1). $$
+<p class="muted">If the district is ready by \(p\) and sits at distance \(r\), the city was founded by \(p-\nu_r\). Improvements
+get the same delay through \(\gamma\) (T6).</p>
 <h3><span class="tag">(T6)</span>Lateness · <code>lateness_link</code></h3>
-$$ \ell_{d,c,p}\;\ge\;A_{d,c}-M_{d,c}\,b_{d,c,p},\qquad
-A_{d,c}=\sum_t\big(\beta_D+a_{d,c,t}-\lambda v(t)\big)z_{d,c,t}+\sum v_{d,d'}\,y_{d,d',c,t}+\sum v_{d,i}\,q_{d,i,c,u}, $$
-$$ r_{i,c,t,p}\le\omega_{i,c,t},\qquad r_{i,c,t,p}\le F_{c,\,p-\Delta_{\delta(c,t)}} . $$
-<p class="muted">\(A\) is the district's static value on the tile \(z\) picked, with its bonus \(\beta_D\) so that every
-district (an Aqueduct too) is worth being early; \(M\) its largest value. Minimising lateness makes
-\(\ell=\max(0,A)\) until the district is ready, 0 after. The only big-M left, and it sits on a penalty: the LP
-relaxation is the static one plus a correction. The improvement link is exact.</p>
+$$ \chi_{d,c,p}\;\ge\;A_{d,c}-\bar A_{d,c}\,\psi_{d,c,p},\qquad
+\gamma_{i,c,t,p}\;\le\;\omega_{i,c,t},\qquad \gamma_{i,c,t,p}\;\le\;\Phi_{c,\,p-\nu_{\delta(c,t)}} . $$
 
-<h3>Objective · <code>lateness_term</code> (added to §8)</h3>
-$$ f \;-\;\frac1P\sum_{p=1}^{P}\Big[\sum_{c\in C}s_c\,(x_c-F_{c,p}) \;+\;\sum_{d,c}\ell_{d,c,p}
-\;+\;\sum_{(i,c,t),\,c\in C} g_{i,t}\,(\omega_{i,c,t}-r_{i,c,t,p})\Big] . $$
-<p class="muted">\(f\) is the static objective (§8), unchanged. <code>evaluate()</code> scores a timed plan the same way:
-the score line shows <code>- late</code>, the yields lost by being late. The district bonus \(\beta_D\) lost by being late
-is reported apart (<code>late_bonus</code>), as the score leaves the bonuses out: MIP objective = score + bonuses −
-<code>late_bonus</code>. The player's existing cities and their improvements are there from the start.</p>
+<h3>Objective · <code>lateness_term</code></h3>
+$$ f_H \;=\; f\;-\;\frac1H\sum_{p\in\mathcal H}\Big[\sum_{c\in C}s_c\,(x_c-\Phi_{c,p})
+\;+\;\sum_{(d,c)}\chi_{d,c,p}
+\;+\;\sum_{(i,c,t)\in Q,\ c\in C} h_{i,t}\,\big(\omega_{i,c,t}-\gamma_{i,c,t,p}\big)\Big] $$
+<p class="muted">\(f\) is the static objective of §8, unchanged (all its terms and bonuses). \(\gamma_{i,c,t,p}\) is 0 where it
+doesn't exist (\(p\le\nu_r\)). Each bracket is \(\ge0\) at any feasible point (by T1, T6), so \(f_H\le f\). The player's
+existing cities and their improvements are there from the start: no lateness.</p>
+
+<p><b>Proposition 1 (what lateness costs).</b> At an optimum with \(x, z, \omega, \phi, \psi\) integer, write \(p_c\) for
+the period of city \(c\) and \(p_{d,c}=\min\{p:\psi_{d,c,p}=1\}\) for its district (\(H+1\) if none: after the horizon).
+Then, of \(f\), the plan loses
+$$ \frac{p_c-1}{H}\,s_c \ \text{per city},\qquad \frac{p_{d,c}-1}{H}\max(0,A_{d,c}) \ \text{per district},\qquad
+\frac{\min\big(H,\;p_c+\nu_{\delta(c,t)}-1\big)}{H}\,h_{i,t} \ \text{per improvement of a new city}. $$
+<i>Proof.</i> City: \(x_c-\Phi_{c,p}=1\) exactly for \(p<p_c\), i.e. \(p_c-1\) periods. District: \(\chi\) only appears with a
+negative coefficient, so it takes its least feasible value \(\max(0,A-\bar A\psi_{d,c,p})\): \(\max(0,A)\) while
+\(\psi=0\) (\(p<p_{d,c}\)), and \(0\) once \(\psi=1\) since \(A\le\bar A\). Improvement: \(\gamma\) only appears with a positive
+coefficient, so \(\gamma_{i,c,t,p}=\min(\omega_{i,c,t},\Phi_{c,p-\nu_r})\), which is 1 exactly for
+\(p\ge p_c+\nu_r\). \(\square\)<br>
+So something ready in period \(p\) loses \((p-1)/H\) of its value, \(1/H\) for each period it isn't there, and after the
+horizon all of it. In the district's \(A\) the bonus \(\beta_D\) is counted too, so every district, an Aqueduct as well, is
+worth being early. <code>evaluate()</code> uses these formulas: its <code>late</code> is the yields part, its
+<code>late_bonus</code> the \(\beta_D\) part (left out of the score, like the bonuses), so
+MIP objective = score + bonuses − <code>late_bonus</code> (tested).</p>
+
+<p><b>Proposition 2 (one period is the static model).</b> Let \(H=1\), and suppose \(\Theta/\theta_D\ge K+|D\setminus
+D^{\text{pop}}|\) (6 ≥ 3 + 2 by default) and \(\theta_r<\Theta\) for all \(r\). Then the timed model is the static model
+with the one extra constraint \(\sum_c x_c\le\bar n_1\); in particular, if \(\bar n_1\) doesn't bind, the optimal values
+are equal and every static optimum (with its schedule) is a timed optimum.<br>
+<i>Proof.</i> With \(H=1\), \(\theta=\Theta\) and \(\nu_r=\lfloor\theta_r/\Theta\rfloor=0\), so (T5) is empty and \(\gamma_{i,c,t,1}\) exists for every option. Take any point
+\((x,z,\omega,y,q)\) feasible for the static model with \(\sum x_c\le\bar n_1\), and set \(\phi_{c,1}=x_c\),
+\(\psi_{d,c,1}=\sum_t z_{d,c,t}\), \(\gamma=\omega\), \(\chi=0\). (T1), (T2) hold; (T3): \(\sum_t z_{d,c,t}\le x_c\) is (3);
+(T4): a city has at most \(K\) specialty districts (8) and one of each other type (3), so
+\(\sum_d\psi_{d,c,1}\le K+|D\setminus D^{\text{pop}}|\le(\Theta/\theta_D)\,x_c\); (T6): \(A\le\bar A\,\psi\), since \(\psi=\sum_t z_{d,c,t}\in\{0,1\}\) and either both sides are 0 or
+\(A\le\bar A\); \(\gamma\le\Phi_{c,1}=x_c\) by (9). Every bracket of \(f_1\) is then 0, so \(f_1=f\). Conversely
+\(f_1\le f\) at every feasible point, and the timed constraints include the static ones. \(\square\)<br>
+(The step \(A\le\bar A\,\psi\) uses integrality for the \(q\) terms: \(\sum_u q_{d,i,c,u}\le L_c\) holds only once the district
+is placed. At a fractional \(z\) in the LP relaxation \(\chi\) can be positive, so the two relaxations can differ
+slightly.)<br>
+(Test <code>test_one_period_is_the_static_model</code>: equal objectives.) With more periods, timing moves the placements: a
+tile that can be ready sooner loses less.</p>
+
+<h3>The timed programme</h3>
+<div class="card">
+$$
+\begin{aligned}
+\max\quad & f(x,z,y,\omega,q)\;-\;\frac1H\sum_{p\in\mathcal H}\Big[\sum_{c\in C}s_c(x_c-\Phi_{c,p})+\sum_{(d,c)}\chi_{d,c,p}
++\sum_{(i,c,t)\in Q,\,c\in C}h_{i,t}(\omega_{i,c,t}-\gamma_{i,c,t,p})\Big]\\[4pt]
+\text{s.t.}\quad & \text{(1)–(10) of \S 10}\\
+& \textstyle\sum_p\phi_{c,p}\le x_c,\quad \psi_{d,c,p-1}\le\psi_{d,c,p},\quad \psi_{d,c,H}\le\sum_t z_{d,c,t} && \text{(T1)}\\
+& \textstyle\sum_{c\in C}\Phi_{c,p}\le\bar n_p && \text{(T2)}\\
+& \psi_{d,c,p}\le\Phi_{c,p}\quad(c\in C) && \text{(T3)}\\
+& \textstyle\sum_d\psi_{d,c,p}\le\frac{\theta}{\theta_D}\sum_{q\le p}(p-q+1)\phi_{c,q}\ (c\in C),\quad
+\sum_d\psi_{d,e,p}\le\frac{\theta}{\theta_D}p\ (e\in E) && \text{(T4)}\\
+& \textstyle\psi_{d,c,p}+\sum_{t:\delta(c,t)=r}z_{d,c,t}-\Phi_{c,p-\nu_r}\le1\quad(c\in C,\ \nu_r\ge1) && \text{(T5)}\\
+& \chi_{d,c,p}\ge A_{d,c}-\bar A_{d,c}\psi_{d,c,p},\quad \gamma_{i,c,t,p}\le\omega_{i,c,t},\quad
+\gamma_{i,c,t,p}\le\Phi_{c,p-\nu_{\delta(c,t)}} && \text{(T6)}\\
+& \phi,\psi\ \text{binary},\quad 0\le\chi_{d,c,p}\le\bar A_{d,c},\quad 0\le\gamma\le1
+\end{aligned}
+$$
+</div>
+<p class="muted">Size: \(H|C|\) of \(\phi\), \(H\) per (district, city) of \(\psi\) and \(\chi\), at most \(H\) per new city's
+improvement option of \(\gamma\). Rows: \(|C|\) + \(H\) + 1 per (district, city) for (T1); \(\le H\) for (T2); \(H\) per
+(district, new city) for (T3); \(H\) per city for (T4); \(H\) per (district, new city, delayed ring) for (T5); \(H\) per
+\(\chi\) and two per \(\gamma\) for (T6). The only big-M is \(\bar A\) in (T6), and it sits on a penalty: rows (1)–(10)
+are unchanged, and lateness only corrects the objective.</p>
 
 <h3>Solving · <code>timing.mode</code></h3>
 <p>Three solves, each logged as a stage: <b>where</b> (the static model); <b>when</b> (the timed model with \(x, z, \omega\)
@@ -565,7 +640,7 @@ pass a start). The joint solve can only improve on the start. <code>sequential</
 The log says what each stage gave: <code>static plan: …</code> and <code>static plan, scheduled: …</code> (counts, and
 how many are within the horizon), <code>starting from the plan above</code> and HiGHS's <code>MIP start solution is
 feasible</code>, then <code>joint: +5.1% over the static plan, scheduled (830.46 -&gt; 872.67)</code> or <code>joint: kept its
-start</code>. Beyond 8 periods it warns: the joint model grows with \(P\) and at 24 periods HiGHS doesn't finish its first
+start</code>. Beyond 8 periods it warns: the joint model grows with \(H\) and at 24 periods HiGHS doesn't finish its first
 LP in 60 s, so the joint stage returns its start (still a valid, scheduled plan). With 12 periods,
 continents-revealed gains 5.1%; continents-radius6 keeps its start.</p>
 <p class="muted">Without a start, the joint model found no plan at all in 60 s on the radius-18 and full maps. With it
