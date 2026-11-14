@@ -75,14 +75,17 @@ class Model:
         elif lo > 0 or hi < 0:
             raise ValueError("empty row that can't hold")
 
-    def solve(self, options: dict[str, Any] | None = None, live: bool = False) -> Solution:
+    def solve(self, options: dict[str, Any] | None = None, live: bool = False,
+              start: Mapping[Var, float] | None = None) -> Solution:
         """Maximise; HiGHS's log goes into Solution.log, and also to the terminal as it
         runs when live is True.
         options: scipy.optimize.milp options (time_limit, mip_rel_gap, presolve,
-        node_limit); disp is forced on so there is a log to capture."""
+        node_limit); disp is forced on so there is a log to capture.
+        start: a feasible plan to start from (variable -> value, others 0); HiGHS then
+        searches from it. Solved through highspy, as scipy.optimize.milp can't pass one."""
         options = {"time_limit": 60.0, "mip_rel_gap": 1e-6, **(options or {}), "disp": True}
         with _capture_stdout(tee=live) as out:
-            sol = self._solve(options)
+            sol = self._solve(options) if start is None else self._solve_highspy(options, start)
         sol.log = out.read()
         return sol
 
@@ -119,6 +122,63 @@ class Model:
         values = {name: (round(x) if integer else x)
                   for name, x, integer in zip(self.names, res.x, self.integer)}
         return Solution(status, -res.fun, values, seconds, stats)
+
+
+    def _solve_highspy(self, options: dict[str, Any], start: Mapping[Var, float]) -> Solution:
+        """The same model through highspy, with a starting solution. The scipy options are
+        mapped to HiGHS's (node_limit -> mip_max_nodes, presolve -> "on"/"off", disp ->
+        output_flag); any other is passed to HiGHS as it is."""
+        import highspy
+
+        n = len(self.names)
+        begin = time.perf_counter()
+        inf = highspy.kHighsInf
+        lp = highspy.HighsLp()
+        lp.num_col_, lp.num_row_ = n, len(self.rows)
+        lp.col_cost_ = list(self.obj)
+        lp.col_lower_ = [-inf if math.isinf(x) else x for x in self.lb]
+        lp.col_upper_ = [inf if math.isinf(x) else x for x in self.ub]
+        lp.row_lower_ = [-inf if math.isinf(lo) else lo for _, lo, _ in self.rows]
+        lp.row_upper_ = [inf if math.isinf(hi) else hi for _, _, hi in self.rows]
+        lp.sense_ = highspy.ObjSense.kMaximize
+        lp.integrality_ = [highspy.HighsVarType.kInteger if i else highspy.HighsVarType.kContinuous
+                           for i in self.integer]
+        lp.a_matrix_.format_ = highspy.MatrixFormat.kRowwise
+        starts: list[int] = [0]
+        index: list[int] = []
+        value: list[float] = []
+        for coeffs, _, _ in self.rows:
+            index.extend(coeffs)
+            value.extend(coeffs.values())
+            starts.append(len(index))
+        lp.a_matrix_.start_, lp.a_matrix_.index_, lp.a_matrix_.value_ = starts, index, value
+        h = highspy.Highs()
+        names = {"node_limit": "mip_max_nodes", "disp": "output_flag"}
+        for k, v in options.items():
+            if k == "presolve" and isinstance(v, bool):
+                v = "on" if v else "off"
+            h.setOptionValue(names.get(k, k), v)
+        h.passModel(lp)
+        col_value = [0.0] * n
+        for name, x in start.items():
+            col_value[self.index[name]] = float(x)
+        sol = highspy.HighsSolution()
+        sol.col_value = col_value   # (assigning into sol.col_value[i] would change a copy)
+        h.setSolution(sol)
+        h.run()
+        seconds = time.perf_counter() - begin
+        model_status = h.getModelStatus()
+        status = {highspy.HighsModelStatus.kOptimal: "optimal",
+                  highspy.HighsModelStatus.kTimeLimit: "time limit",
+                  highspy.HighsModelStatus.kInfeasible: "infeasible",
+                  highspy.HighsModelStatus.kUnbounded: "unbounded"}.get(model_status, h.modelStatusToString(model_status))
+        info = h.getInfo()
+        stats = {"variables": n, "integer": sum(self.integer), "rows": len(self.rows), "gap": info.mip_gap}
+        if info.primal_solution_status != 2:   # no feasible solution
+            return Solution(status, float("nan"), {}, seconds, stats)
+        x = h.getSolution().col_value
+        values = {name: (round(v) if integer else v) for name, v, integer in zip(self.names, x, self.integer)}
+        return Solution(status, info.objective_function_value, values, seconds, stats)
 
 
 class _Captured:
