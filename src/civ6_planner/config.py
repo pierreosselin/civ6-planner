@@ -26,24 +26,22 @@ class Timing:
     """The [timing] table: periods = 0 is the static model (everything at once). Speeds
     are in turns; the model turns them into periods of turns_per_period turns."""
     periods: int = 0
-    mode: str = "sequential"            # "sequential": where (static) then when; "joint": both at once
-    turns_per_period: int = 20
-    settlers_base: float = 1.0          # new cities per period on top of the per-city rate
-    turns_per_settler: float = 40.0     # turns one city needs to train a settler
-    turns_per_district: float = 20.0    # turns one city needs to build a district
-    turns_per_specialty: float = 30.0   # city age (turns) for each specialty district beyond the first
+    mode: str = "joint"                 # "joint": where and when together; "sequential": where, then when
+    horizon_turns: int = 120           # the horizon, cut into `periods` equal periods
+    settlers_at_start: int = 1          # new cities that can be founded at once
+    turns_per_settler: float = 40.0     # then each city trains a settler every this many turns
+    turns_per_district: float = 20.0    # turns a city needs per district
     ring_delay_turns: tuple[float, ...] = (0, 0, 15, 35)   # by distance from the city: turns before usable
-    district_base_value: float = 4.0    # weighted yield per turn of a built district (its buildings)
-    build_speedup: tuple[float, ...] = ()   # per period, multiplies settler and district rates (empty: 1)
+
+    @property
+    def turns_per_period(self) -> float:
+        return self.horizon_turns / self.periods if self.periods else float(self.horizon_turns)
 
     def delay(self, r: int) -> int:
-        """Periods after founding before a tile at distance r is usable (rounded up)."""
+        """Periods after founding before a tile at distance r is usable (rounded down, so
+        one long period has no delay)."""
         turns = self.ring_delay_turns[min(r, len(self.ring_delay_turns) - 1)]
-        return -int(-turns // self.turns_per_period)
-
-    def speedup(self, p: int) -> float:
-        """Rate multiplier in period p (1-based)."""
-        return self.build_speedup[p - 1] if p - 1 < len(self.build_speedup) else 1.0
+        return int(turns // self.turns_per_period)
 
 
 @dataclass
@@ -107,13 +105,11 @@ def load(*paths: str | None) -> Config:
 def _timing(t: dict[str, Any]) -> Timing:
     if t["mode"] not in ("sequential", "joint"):
         raise ValueError(f"timing.mode must be sequential or joint, not {t['mode']!r}")
-    return Timing(periods=int(t["periods"]), mode=t["mode"], turns_per_period=int(t["turns_per_period"]),
-                  settlers_base=float(t["settlers_base"]), turns_per_settler=float(t["turns_per_settler"]),
+    return Timing(periods=int(t["periods"]), mode=t["mode"], horizon_turns=int(t["horizon_turns"]),
+                  settlers_at_start=int(t["settlers_at_start"]), turns_per_settler=float(t["turns_per_settler"]),
                   turns_per_district=float(t["turns_per_district"]),
-                  turns_per_specialty=float(t["turns_per_specialty"]),
-                  ring_delay_turns=tuple(float(v) for v in t["ring_delay_turns"]),
-                  district_base_value=float(t["district_base_value"]),
-                  build_speedup=tuple(float(v) for v in t["build_speedup"]))
+                  ring_delay_turns=tuple(float(v) for v in t["ring_delay_turns"]))
+
 
 
 def _value(v: Any) -> str:

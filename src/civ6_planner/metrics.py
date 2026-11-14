@@ -88,7 +88,7 @@ def timing(plan: Plan) -> dict[str, Any]:
     tm = plan.config.timing
     rows = []
     for p in range(1, tm.periods + 1):
-        rows.append({"period": p, "turns": [(p - 1) * tm.turns_per_period + 1, p * tm.turns_per_period],
+        rows.append({"period": p, "turns": [round((p - 1) * tm.turns_per_period) + 1, round(p * tm.turns_per_period)],
                      "cities": sum(1 for c in plan.cities if plan.timing.get(c) == p),
                      "districts": sum(1 for _, t, _ in plan.districts if plan.timing.get(t) == p)})
     return {"periods": rows,

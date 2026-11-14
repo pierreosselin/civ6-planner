@@ -106,7 +106,8 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         say("[5/5] Result")
         if parts:
             say(f"  score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
-                f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}")
+                f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}"
+                 + (f" - late {parts['late']:.1f}" if "late" in parts else ""))
         for line in metrics.format_summary(stats):
             say(line)
         for line in validate.format_check(check):

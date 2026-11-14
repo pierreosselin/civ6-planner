@@ -49,7 +49,7 @@ from . import config
 from .config import YIELDS, Config, Yields
 from .gamemap import XY, GameMap, Tile
 from .rules import Rules
-from .solver import Model, Var
+from .solver import Model, Solution, Var
 
 # Parameters (weights, bonuses, site radius, loss factor, solver options) are in
 # config/default.toml; see config.py. Functions take a Config, None meaning the defaults.
@@ -109,34 +109,33 @@ def evaluate(gmap: GameMap, rules: Rules, plan: Plan, cfg: Config | None = None)
 
 
 def _evaluate_timed(gmap: GameMap, rules: Rules, plan: Plan, cfg: Config) -> tuple[float, dict[str, Any]]:
-    """evaluate() for a timed plan: something ready in period p counts T (P - p + 1) turns
-    (improvements: from delay(r) periods after their city's founding; the player's
-    existing cities' from period 1); without a period (after the horizon), nothing."""
-    tm = cfg.timing
-    T, P = tm.turns_per_period, tm.periods
+    """evaluate() for a timed plan: the static score minus the yields lost by being late
+    ("late"). The model also counts the district bonus as lost when late ("late_bonus",
+    left out of the score like the bonuses): MIP objective = score + bonuses - late_bonus.
+    Something ready in period p loses (p - 1) / P of its value (city: site value;
+    district: its net value plus its bonus, if positive; improvement: from its city's founding period +
+    delay(r)); after the horizon (no period), all of it. The player's existing cities and
+    their improvements are ready from the start."""
+    score, parts = evaluate(gmap, rules, dataclasses.replace(plan, timing={}), cfg)
+    P = cfg.timing.periods
     planned: dict[XY, str] = {xy: CITY_CENTER for xy in plan.cities}
     planned.update({xy: d for d, xy, _ in plan.districts})
     improved = {xy: i for i, xy, _ in plan.improvements}
-    site = adjacency = lost = improvements = 0.0
-    yields: dict[str, int] = {}
-    later = P + 1   # no period: after the horizon, counts nothing
+    late = late_bonus = 0.0
+    after = P + 1   # no period: after the horizon, all of the value lost
     for xy in plan.cities:
-        site += T * (P + 1 - plan.timing.get(xy, later)) * site_value(gmap, gmap.tiles[xy], cfg)
+        late += (plan.timing.get(xy, after) - 1) / P * site_value(gmap, gmap.tiles[xy], cfg)
     for d, xy, _ in plan.districts:
-        turns = T * (P + 1 - plan.timing.get(xy, later))
-        adj = rules.adjacency(gmap, gmap.tiles[xy], d, planned, improved)
-        for y, v in adj.items():
-            yields[y] = yields.get(y, 0) + v
-        adjacency += turns * (tm.district_base_value + cfg.weighted(adj))
-        lost += turns * cfg.loss_factor * cfg.weighted(gmap.tiles[xy])
+        net = (cfg.weighted(rules.adjacency(gmap, gmap.tiles[xy], d, planned, improved))
+               - cfg.loss_factor * cfg.weighted(gmap.tiles[xy]))
+        share = (plan.timing.get(xy, after) - 1) / P
+        late += share * max(0.0, net)
+        late_bonus += share * (max(0.0, net + cfg.district_bonus) - max(0.0, net))
     for i, xy, c in plan.improvements:
         if c in plan.cities:
-            turns = T * max(0, P + 1 - plan.timing.get(c, later) - tm.delay(gmap.distance(c, xy)))
-        else:
-            turns = T * P   # the player's existing cities: their borders are there
-        improvements += turns * improvement_value(rules, cfg, i, gmap.tiles[xy])
-    return site + adjacency - lost + improvements, {"site": site, "adjacency": adjacency, "lost": lost,
-                                                    "improvements": improvements, "yields": yields}
+            waits = min(P, plan.timing.get(c, after) + cfg.timing.delay(gmap.distance(c, xy)) - 1)
+            late += waits / P * improvement_value(rules, cfg, i, gmap.tiles[xy])
+    return score - late, {**parts, "late": late, "late_bonus": late_bonus}
 
 
 # ---------------------------------------------------------------------------
@@ -179,10 +178,10 @@ class Instance:
     q: dict[tuple[str, str, XY, XY], Var] = field(default_factory=dict)
     # Timing (cfg.timing.periods > 0; see the Timing section):
     f: dict[tuple[XY, int], Var] = field(default_factory=dict)           # (c, p): city c founded in period p
-    b: dict[tuple[str, XY, int], Var] = field(default_factory=dict)      # (d, c, p): c's district d built by p
-    u: dict[tuple[str, XY, int], Var] = field(default_factory=dict)      # (d, c, p): its net yield counted in p
-    # (i, c, t, p): improvement option w[i,c,t] of a new city c founded in period p
-    wp: dict[tuple[str, XY, XY, int], Var] = field(default_factory=dict)
+    b: dict[tuple[str, XY, int], Var] = field(default_factory=dict)      # (d, c, p): c's district d ready by p
+    late: dict[tuple[str, XY, int], Var] = field(default_factory=dict)   # (d, c, p): its value not there by p
+    # (i, c, t, p): improvement option w[i,c,t] in use by period p (new cities)
+    ready: dict[tuple[str, XY, XY, int], Var] = field(default_factory=dict)
 
     @property
     def periods(self) -> int:
@@ -473,8 +472,6 @@ def one_thing_per_tile(m: Model, inst: Instance) -> None:
 
 
 # --- Objective terms (maximised) ---------------------------------------------
-# Static model: each yield counted once. Timed model (periods > 0): per-turn yields times
-# the turns they count (from the period the city/district is ready in), through f, u, wp.
 
 def _adjacency_value(inst: Instance, d: str, c: XY, t: XY) -> float:
     """Weighted adjacency of city c's district d on t (existing districts and c's centre)."""
@@ -503,13 +500,7 @@ def _ibonus_values(inst: Instance) -> dict[tuple[str, str], float]:
 
 
 def site_term(m: Model, inst: Instance) -> None:
-    """+ s_c x[c]: weighted yields of the city centre and the tiles within site_radius.
-    Timed: + T (P - p + 1) s_c f[c,p], counted from the founding period on."""
-    if inst.periods:
-        T, P = inst.cfg.timing.turns_per_period, inst.periods
-        for (c, p), v in inst.f.items():
-            m.add_obj(v, T * (P - p + 1) * inst.site[c])
-        return
+    """+ s_c x[c]: weighted yields of the city centre and the tiles within site_radius."""
     for c, v in inst.x.items():
         m.add_obj(v, inst.site[c])
 
@@ -517,63 +508,34 @@ def site_term(m: Model, inst: Instance) -> None:
 def adjacency_term(m: Model, inst: Instance) -> None:
     """+ a[d,c,t] z[d,c,t]: the district's adjacency, a constant per (city, tile).
     Counts existing districts and the district's own city centre as planned; other
-    planned districts aren't (see the module docstring).
-    Timed: + T u[d,c,p], the district's net yield (base, adjacency, bonuses, minus the
-    covered tile) in each period from the one it is ready in."""
-    if inst.periods:
-        for v in inst.u.values():
-            m.add_obj(v, inst.cfg.timing.turns_per_period)
-        return
+    planned districts aren't (see the module docstring)."""
     for (d, c, t), v in inst.z.items():
         m.add_obj(v, _adjacency_value(inst, d, c, t))
 
 
 def covered_tile_term(m: Model, inst: Instance) -> None:
-    """- loss_factor v(t) z[d,c,t]: part of the yields of the tile a district covers.
-    Timed: inside u (adjacency_term), from the period the district is ready in."""
-    if inst.periods:
-        return
+    """- loss_factor v(t) z[d,c,t]: part of the yields of the tile a district covers."""
     for (d, c, t), v in inst.z.items():
         m.add_obj(v, -_loss_value(inst, t))
 
 
 def neighbour_bonus_term(m: Model, inst: Instance) -> None:
     """+ w_k change y[d,d2,c,t]: e.g. +2 production (weighted) for an Industrial Zone
-    next to its city's Aqueduct. At most one d2 per city, so the count is 0 or 1.
-    Timed: inside u (adjacency_term), from the period d is ready in."""
-    if inst.periods:
-        return
+    next to its city's Aqueduct. At most one d2 per city, so the count is 0 or 1."""
     value = _bonus_values(inst)
     for (d, d2, c, t), v in inst.y.items():
         m.add_obj(v, value[d, d2])
 
 
 def improvement_term(m: Model, inst: Instance) -> None:
-    """+ (v(gain_i) + worked_tile_factor v(t)) w[i,c,t]: an improved tile is worked.
-    Timed: value x T x the periods it counts: from delay(r) periods after the city's
-    founding period on, r = distance to the city (the player's existing cities: every
-    period, their borders are there)."""
-    if inst.periods:
-        T, P = inst.cfg.timing.turns_per_period, inst.periods
-        for (i, c, t), v in inst.w.items():
-            value = improvement_value(inst.rules, inst.cfg, i, inst.gmap.tiles[t])
-            delay = inst.cfg.timing.delay(inst.gmap.distance(c, t))
-            if c in inst.x:
-                for p in range(1, P + 1):
-                    m.add_obj(inst.wp[i, c, t, p], value * T * max(0, P - p - delay + 1))
-            else:
-                m.add_obj(v, value * T * P)
-        return
+    """+ (v(gain_i) + worked_tile_factor v(t)) w[i,c,t]: an improved tile is worked."""
     for (i, c, t), v in inst.w.items():
         m.add_obj(v, improvement_value(inst.rules, inst.cfg, i, inst.gmap.tiles[t]))
 
 
 def improvement_bonus_term(m: Model, inst: Instance) -> None:
     """+ w_k change q[d,i,c,t]: e.g. +1 production (weighted) per quarry next to an
-    Industrial Zone, +0.5 per mine (the game's +1 per 2, taken linearly).
-    Timed: inside u (adjacency_term), from the period d is ready in."""
-    if inst.periods:
-        return
+    Industrial Zone, +0.5 per mine (the game's +1 per 2, taken linearly)."""
     value = _ibonus_values(inst)
     for (d, i, c, t), v in inst.q.items():
         m.add_obj(v, value[d, i])
@@ -592,20 +554,22 @@ def district_bonus_term(m: Model, inst: Instance) -> None:
 
 
 # --- Timing (cfg.timing.periods = P > 0; every step does nothing when P = 0) ---------
-# Periods p = 1..P of T turns; something ready in period p counts in periods p..P,
-# T (P - p + 1) turns. "Where" stays in x, z, w; "when" is per city and per
-# (district, city), without a tile index, so the model grows by a few variables per
-# city and period only:
-#   f[c,p]    binary, city c founded in period p        sum_p f[c,p] <= x[c]
-#   b[d,c,p]  binary, c's district d built by period p  monotone, b[d,c,P] <= sum_t z[d,c,t]
-#   (a placement with no period comes after the horizon: only its placement bonus counts)
-#   u[d,c,p]  continuous, d's net per-turn yield counted in period p:
-#             u <= A[d,c] + L(1 - b[d,c,p]),  u <= M b[d,c,p],  -L <= u <= M
-#             with A = sum_t (base + adjacency - covered tile) z + bonuses (y, q): u = A once
-#             built, else 0 (base = district_base_value, for the district's buildings)
-#   wp[i,c,t,p]  improvement option w[i,c,t] of a new city founded in p (exact, no big M);
-#             it counts from delay(distance) periods after founding
+# The static model stays whole; timing subtracts what is lost by being late. The
+# horizon is P periods of T turns; something ready in period p loses (p - 1) / P of its
+# value (each period not ready costs 1/P). "Where" stays in x, z, w; "when" is added per
+# city and per (district, city), without a tile index:
+#   f[c,p]       binary, new city c founded (ready) in period p     sum_p f[c,p] <= x[c]
+#   b[d,c,p]     binary, c's district d ready by period p           monotone, b[d,c,P] <= sum_t z[d,c,t]
+#   (no period: after the horizon, all of its value lost, its placement bonus kept)
+#   late[d,c,p]  >= 0, the district's value not there in period p:  late >= A[d,c] - M b[d,c,p]
+#                (A = district bonus + adjacency - covered tile + y/q bonuses of the tile z
+#                picked; M = largest A)
+#   ready[i,c,t,p] in [0, 1], improvement option w[i,c,t] in use by p:
+#                ready <= w[i,c,t], ready <= F[c, p - delay(r)]
 # F[c,q] = sum_{p<=q} f[c,p] (founded by q; 1 for the player's existing cities).
+# Every timing rule allows the same period, and delays round down, so with P = 1 (one
+# period, the whole horizon) the model is the static one plus horizon totals (cities
+# within the settler schedule, districts per city within the build rate).
 
 def _founded_by(inst: Instance, c: XY, q: int) -> tuple[list[tuple[Var, float]], float]:
     """F[c,q] as (terms, constant)."""
@@ -614,57 +578,58 @@ def _founded_by(inst: Instance, c: XY, q: int) -> tuple[list[tuple[Var, float]],
     return [(inst.f[c, p], 1.0) for p in range(1, q + 1)], 0.0
 
 
-def _district_net(inst: Instance) -> dict[tuple[str, XY], tuple[list[tuple[Var, float]], float, float]]:
-    """(d, c) -> (A's terms, M = largest A, L = largest loss)."""
+def _district_value(inst: Instance) -> dict[tuple[str, XY], tuple[list[tuple[Var, float]], float]]:
+    """(d, c) -> (terms of A, the district's static value on the tile z picked (district
+    bonus + adjacency - covered tile + y/q bonuses; the bonus so that every district is
+    worth being early); M, the largest A can be)."""
     bonus, ibonus = _bonus_values(inst), _ibonus_values(inst)
-    out: dict[tuple[str, XY], tuple[list[tuple[Var, float]], float, float]] = {}
+    out: dict[tuple[str, XY], tuple[list[tuple[Var, float]], float]] = {}
     for (d, c), tiles in inst.spots.items():
-        if not tiles:
-            continue
-        base = inst.cfg.timing.district_base_value
-        terms = [(inst.z[d, c, t], base + _adjacency_value(inst, d, c, t) - _loss_value(inst, t)) for t in tiles]
-        best = base + max(_adjacency_value(inst, d, c, t) for t in tiles)
-        out[d, c] = (terms, best, max(_loss_value(inst, t) for t in tiles))
+        if tiles:
+            terms = [(inst.z[d, c, t], inst.cfg.district_bonus + _adjacency_value(inst, d, c, t) - _loss_value(inst, t))
+                     for t in tiles]
+            out[d, c] = (terms, max(a for _, a in terms))
     extra: dict[tuple[str, XY], float] = {}
     for (d, d2, c, t), v in inst.y.items():
         out[d, c][0].append((v, bonus[d, d2]))
-        extra.setdefault((d, c), 0.0)
     for d, d2, c in {(d, d2, c) for d, d2, c, _ in inst.y}:
-        extra[d, c] += bonus[d, d2]
+        extra[d, c] = extra.get((d, c), 0.0) + bonus[d, d2]
     for (d, i, c, u), v in inst.q.items():
         out[d, c][0].append((v, ibonus[d, i]))
     for d, i, c in {(d, i, c) for d, i, c, _ in inst.q}:
         n = inst.improvements_left.get(c, inst.cfg.max_improvements)
         extra[d, c] = extra.get((d, c), 0.0) + ibonus[d, i] * n
-    return {k: (terms, m + extra.get(k, 0.0), loss) for k, (terms, m, loss) in out.items()}
+    return {k: (terms, best + extra.get(k, 0.0)) for k, (terms, best) in out.items()}
 
 
 def timing_vars(m: Model, inst: Instance) -> None:
-    """f[c,p], b[d,c,p], u[d,c,p] (only where the district has some value), and
-    wp[i,c,t,p] for each improvement option of a new city."""
+    """f[c,p] and b[d,c,p]; late[d,c,p] where the district can be worth something;
+    ready[i,c,t,p] for new cities' improvement options in the periods their ring can be
+    in use (p >= 1 + delay(r))."""
     P = inst.periods
     if not P:
         return
     for c in inst.sites:
         for p in range(1, P + 1):
             inst.f[c, p] = m.var(("found", c, p))
-    for (d, c), (terms, best, loss) in _district_net(inst).items():
+    for (d, c), (terms, best) in _district_value(inst).items():
         for p in range(1, P + 1):
-            inst.b[d, c, p] = m.var(("built", d, c, p))
-        if best > 0 or loss > 0:
+            inst.b[d, c, p] = m.var(("ready", d, c, p))
+        if best > 0:
             for p in range(1, P + 1):
-                inst.u[d, c, p] = m.var(("dyield", d, c, p), lb=-loss, ub=best, integer=False)
-    for (i, c, t), w in inst.w.items():
+                inst.late[d, c, p] = m.var(("late", d, c, p), ub=best, integer=False)
+    for (i, c, t) in inst.w:
         if c in inst.x:
-            for p in range(1, P + 1):
-                inst.wp[i, c, t, p] = m.var(("imp_when", i, c, t, p), integer=False)
+            for p in range(1 + inst.cfg.timing.delay(inst.gmap.distance(c, t)), P + 1):
+                inst.ready[i, c, t, p] = m.var(("iready", i, c, t, p), integer=False)
 
 
 def timing_link(m: Model, inst: Instance) -> None:
-    """(T1) sum_p f[c,p] <= x[c]; b[d,c,p-1] <= b[d,c,p]; b[d,c,P] <= sum_t z[d,c,t];
-    sum_p wp[i,c,t,p] <= w[i,c,t] and wp[i,c,t,p] <= f[c,p] (the improvement takes its
-    city's founding period; continuous, as f is binary). <=, not =: a placement may come
-    after the horizon (no period), where it counts nothing but its placement bonus."""
+    """(T1) sum_p f[c,p] <= x[c], b[d,c,p-1] <= b[d,c,p], b[d,c,P] <= sum_t z[d,c,t].
+    <=, not =: a placement may come after the horizon (no period), where it loses all its
+    value (as if ready in period P + 1) but keeps its placement bonus. Any placement then
+    has a schedule, which the solver's heuristics need; with capacity to spare, being late
+    never pays, so P = 1 still gives the static plan."""
     P = inst.periods
     if not P:
         return
@@ -674,29 +639,25 @@ def timing_link(m: Model, inst: Instance) -> None:
         for p in range(2, P + 1):
             m.row({inst.b[d, c, p - 1]: 1, inst.b[d, c, p]: -1}, hi=0)
         m.row([(inst.b[d, c, P], 1)] + [(inst.z[d, c, t], -1) for t in inst.spots[d, c]], hi=0)
-    for (i, c, t), w in inst.w.items():
-        if c in inst.x:
-            m.row([(inst.wp[i, c, t, p], 1) for p in range(1, P + 1)] + [(w, -1)], hi=0)
-            for p in range(1, P + 1):
-                m.row({inst.wp[i, c, t, p]: 1, inst.f[c, p]: -1}, hi=0)
 
 
 def settler_schedule(inst: Instance) -> list[int]:
-    """N_p, p = 0..P: the most new cities founded by the end of period p, whole settlers
-    only: N_p = N_{p-1} + floor(a + k_p (existing cities + N_{p-1})),
-    k_p = T / turns_per_settler x speedup(p)."""
+    """N_p, p = 0..P: the most new cities by the end of period p. Simulated turn by turn,
+    so it doesn't depend on the period length: settlers_at_start can found at once, then
+    every city (existing and new) trains one settler per turns_per_settler turns."""
     tm = inst.cfg.timing
-    n = [0]
-    for p in range(1, inst.periods + 1):
-        k = tm.turns_per_period / tm.turns_per_settler * tm.speedup(p)
-        n.append(n[-1] + int(tm.settlers_base + k * (len(inst.own) + n[-1]) + 1e-9))
-    return n
+    n, progress, out = tm.settlers_at_start, 0.0, [0]
+    for turn in range(1, tm.horizon_turns + 1):
+        progress += (len(inst.own) + n) / tm.turns_per_settler
+        n += int(progress)
+        progress -= int(progress)
+        while len(out) <= inst.periods and turn >= len(out) * tm.turns_per_period - 1e-9:
+            out.append(n)
+    return out
 
 
 def settler_capacity(m: Model, inst: Instance) -> None:
-    """(T2) Cities take time: at most N_p new cities founded by the end of period p
-    (settler_schedule): sum_c F[c,p] <= N_p. The schedule assumes the earlier periods
-    founded as many as they could, so it is an upper bound, not tied to the plan."""
+    """(T2) Cities take time: sum_c F[c,p] <= N_p (settler_schedule)."""
     if not inst.periods or not inst.f:
         return
     n = settler_schedule(inst)
@@ -706,61 +667,39 @@ def settler_capacity(m: Model, inst: Instance) -> None:
 
 
 def district_after_city(m: Model, inst: Instance) -> None:
-    """(T3) A district is built at least one period after its city: b[d,c,p] <= F[c,p-1]."""
+    """(T3) A district is ready no earlier than its city: b[d,c,p] <= F[c,p]."""
     if not inst.periods:
         return
     for (d, c, p), v in inst.b.items():
         if c in inst.x:
-            terms, _ = _founded_by(inst, c, p - 1)
+            terms, _ = _founded_by(inst, c, p)
             m.row([(v, 1)] + [(f, -a) for f, a in terms], hi=0)
 
 
 def build_capacity(m: Model, inst: Instance) -> None:
-    """(T4) Districts take time: per city and period at most k_p new districts,
-    k_p = T / turns_per_district x speedup(p):
-    sum_d (b[d,c,p] - b[d,c,p-1]) <= k_p F[c,p-1]."""
+    """(T4) Districts take time: a city has at most k districts ready per period since
+    its founding (that period included), k = T / turns_per_district:
+    sum_d b[d,c,p] <= k sum_{q<=p} (p - q + 1) f[c,q]   (existing cities: <= k p)."""
     tm = inst.cfg.timing
     if not inst.periods:
         return
+    k = tm.turns_per_period / tm.turns_per_district
     per_city: dict[XY, set[str]] = {}
     for d, c, _ in inst.b:
         per_city.setdefault(c, set()).add(d)
     for c, ds in per_city.items():
         for p in range(1, inst.periods + 1):
-            k = tm.turns_per_period / tm.turns_per_district * tm.speedup(p)
-            terms, const = _founded_by(inst, c, p - 1)
-            row = [(inst.b[d, c, p], 1) for d in ds] + [(inst.b[d, c, p - 1], -1) for d in ds if p > 1]
-            m.row(row + [(f, -k * a) for f, a in terms], hi=k * const)
-
-
-def _specialty_cap(inst: Instance, age: int) -> int:
-    """Specialty districts a city may have after `age` periods: 1 + one per
-    turns_per_specialty turns, at most max_specialty_districts (the population limit)."""
-    tm = inst.cfg.timing
-    return min(inst.cfg.max_specialty_districts, 1 + int(age * tm.turns_per_period // tm.turns_per_specialty))
-
-
-def population_by_age(m: Model, inst: Instance) -> None:
-    """(T5) Specialty districts built by p are limited by the city's age (population):
-    sum_{d specialty} b[d,c,p] <= sum_{q<p} cap(p - q) f[c,q], for new cities (existing
-    ones keep specialty_limit)."""
-    if not inst.periods:
-        return
-    per_city: dict[XY, list[str]] = {}
-    for d, c, p in inst.b:
-        if p == 1 and c in inst.x and inst.rules.is_specialty(d):
-            per_city.setdefault(c, []).append(d)
-    for c, ds in per_city.items():
-        for p in range(1, inst.periods + 1):
-            m.row([(inst.b[d, c, p], 1) for d in ds]
-                  + [(inst.f[c, q], -_specialty_cap(inst, p - q)) for q in range(1, p)], hi=0)
+            row = [(inst.b[d, c, p], 1.0) for d in ds]
+            if c in inst.x:
+                m.row(row + [(inst.f[c, q], -k * (p - q + 1)) for q in range(1, p + 1)], hi=0)
+            elif k * p < len(ds):
+                m.row(row, hi=k * p)
 
 
 def ring_delay(m: Model, inst: Instance) -> None:
-    """(T6) Farther tiles are usable later: a tile at distance r from a new city is
-    usable delay(r) periods after its founding period, so a district there is ready in
-    p >= founding + max(1, delay(r)) (one period is already district_after_city):
-    b[d,c,p] + sum_{t at r} z[d,c,t] - F[c, p - delay(r)] <= 1, for delay(r) >= 2."""
+    """(T5) Farther tiles are usable later: a tile at distance r from a new city is usable
+    delay(r) periods after its founding period (turns rounded down to periods):
+    b[d,c,p] + sum_{t at r} z[d,c,t] - F[c, p - delay(r)] <= 1, for delay(r) >= 1."""
     tm = inst.cfg.timing
     if not inst.periods:
         return
@@ -772,7 +711,7 @@ def ring_delay(m: Model, inst: Instance) -> None:
             by_ring.setdefault(inst.gmap.distance(c, t), []).append(t)
         for r, ts in by_ring.items():
             delay = tm.delay(r)
-            if delay < 2:
+            if not delay:
                 continue
             for p in range(1, inst.periods + 1):
                 terms, _ = _founded_by(inst, c, p - delay)
@@ -780,18 +719,45 @@ def ring_delay(m: Model, inst: Instance) -> None:
                       + [(f, -a) for f, a in terms], hi=1)
 
 
-def timed_value_link(m: Model, inst: Instance) -> None:
-    """(T7) u = the district's net yield A once built, else 0:
-    u[d,c,p] <= A + L (1 - b[d,c,p]) and u[d,c,p] <= M b[d,c,p]."""
+def lateness_link(m: Model, inst: Instance) -> None:
+    """(T6) late[d,c,p] >= A[d,c] - M b[d,c,p]: the district's value is missing in
+    period p unless it is ready (A <= M once it is placed). ready[i,c,t,p] <= w[i,c,t]
+    and <= F[c, p - delay(r)]: the improvement is there and its city owns the tile."""
     if not inst.periods:
         return
-    net = _district_net(inst)
-    for (d, c, p), u in inst.u.items():
-        terms, best, loss = net[d, c]
-        b = inst.b[d, c, p]
-        m.row([(u, 1), (b, loss)] + [(v, -a) for v, a in terms], hi=loss)
-        m.row({u: 1, b: -best}, hi=0)
+    value = _district_value(inst)
+    for (d, c, p), v in inst.late.items():
+        terms, best = value[d, c]
+        m.row([(v, 1), (inst.b[d, c, p], best)] + [(z, -a) for z, a in terms], lo=0)
+    for (i, c, t, p), v in inst.ready.items():
+        m.row({v: 1, inst.w[i, c, t]: -1}, hi=0)
+        terms, _ = _founded_by(inst, c, p - inst.cfg.timing.delay(inst.gmap.distance(c, t)))
+        m.row([(v, 1)] + [(f, -a) for f, a in terms], hi=0)
 
+
+def lateness_term(m: Model, inst: Instance) -> None:
+    """- what is lost by being late, 1/P of the value per period not ready:
+    cities  - s_c/P sum_p (x[c] - F[c,p])
+    districts  - 1/P sum_p late[d,c,p]
+    improvements  - g/P sum_p (w[i,c,t] - ready[i,c,t,p])   (new cities)
+    With P = 1 and everything ready, every term is 0: the static objective."""
+    P = inst.periods
+    if not P:
+        return
+    for c, x in inst.x.items():
+        for p in range(1, P + 1):
+            m.add_obj(x, -inst.site[c] / P)
+            for q in range(1, p + 1):
+                m.add_obj(inst.f[c, q], inst.site[c] / P)
+    for v in inst.late.values():
+        m.add_obj(v, -1 / P)
+    for (i, c, t), w in inst.w.items():
+        if c in inst.x:
+            g = improvement_value(inst.rules, inst.cfg, i, inst.gmap.tiles[t])
+            m.add_obj(w, -g)
+            for p in range(1, P + 1):
+                if (i, c, t, p) in inst.ready:
+                    m.add_obj(inst.ready[i, c, t, p], g / P)
 
 
 VARIABLES: list[Step] = [
@@ -817,9 +783,8 @@ CONSTRAINTS: list[Step] = [
     settler_capacity,
     district_after_city,
     build_capacity,
-    population_by_age,
     ring_delay,
-    timed_value_link,
+    lateness_link,
 ]
 OBJECTIVE: list[Step] = [
     site_term,
@@ -830,6 +795,7 @@ OBJECTIVE: list[Step] = [
     improvement_bonus_term,
     city_bonus_term,
     district_bonus_term,
+    lateness_term,
 ]
 
 
@@ -865,9 +831,10 @@ def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: i
     """Best plan for n_cities new cities with their districts and improvements, plus the
     districts and improvements the player's existing cities can still get.
     cfg: a Config (None: config/default.toml); n_cities, districts, improvements override it.
-    Timed (cfg.timing.periods > 0): mode "sequential" solves the static model (where),
-    then the timed one with those placements fixed (when); "joint" solves the timed model
-    alone, where and when together (slow beyond small maps)."""
+    Timed (cfg.timing.periods > 0): the static model first (where), then the timed one
+    with those placements fixed (when); mode "sequential" stops there, "joint" then solves
+    the timed model with everything free, starting from that plan (through highspy), so
+    the timing can move the placements."""
     cfg = cfg or config.default()
     say = progress or (lambda line: None)
     live = progress is not None if live is None else live
@@ -883,25 +850,58 @@ def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: i
         f"{sum(len(v) for v in inst.ispots.values()):,} improvement options "
         f"({cfg.improvement_candidates} best per city)   {time.perf_counter() - start:.1f} s")
     tm = cfg.timing
-    if tm.periods and tm.mode == "sequential":
-        static = dataclasses.replace(cfg, timing=dataclasses.replace(tm, periods=0))
-        say(f"  timed, sequential: first where (the static model), then when ({tm.periods} periods "
-            f"of {tm.turns_per_period} turns) with those placements fixed")
-        where = _solve(prepare(gmap, rules, static, n, ds, cfg.max_city_candidates, imps), static,
-                       say, progress, record, live, "where: ")
-        if where.info["status"] not in ("optimal", "time limit") or not (where.cities or where.districts
-                                                                            or where.improvements):
-            return where
-        plan = _solve(inst, cfg, say, progress, record, live, "when: ", fixed=where)
-        plan.info["where"] = {k: where.info.get(k) for k in ("status", "seconds", "objective", "mip_gap")}
-        return plan
-    return _solve(inst, cfg, say, progress, record, live, "")
+    if not tm.periods:
+        return _solve(inst, cfg, say, progress, record, live, "")[0]
+    static = dataclasses.replace(cfg, timing=dataclasses.replace(tm, periods=0))
+    say(f"  timed ({tm.periods} periods of {tm.turns_per_period:g} turns, {tm.mode}): where (the static "
+        f"model), then when with those placements fixed" + (", then both together from that plan"
+                                                            if tm.mode == "joint" else ""))
+    if tm.mode == "joint" and tm.periods > JOINT_PERIODS_WARNING:
+        say(f"  warning: {tm.periods} periods; beyond {JOINT_PERIODS_WARNING} the joint stage rarely gets past "
+            f"its first LP in the time limit, so it mostly returns its start")
+    where, _ = _solve(prepare(gmap, rules, static, n, ds, cfg.max_city_candidates, imps), static,
+                      say, progress, record, live, "where: ")
+    if where.info["status"] not in ("optimal", "time limit") or not (where.cities or where.districts
+                                                                        or where.improvements):
+        return where
+    say(f"  static plan: {_counts(where)}")
+    plan, sol = _solve(inst, cfg, say, progress, record, live, "when: ", fixed=where)
+    say(f"  static plan, scheduled: {_counts(plan)}")
+    stages = {"where": where.info, "when": dict(plan.info)}
+    if tm.mode == "joint" and sol.values:
+        fresh = prepare(gmap, rules, cfg, n, ds, cfg.max_city_candidates, imps)
+        plan, _ = _solve(fresh, cfg, say, progress, record, live, "joint: ", warm=sol.values)
+        start_obj, obj = stages["when"]["objective"], plan.info["objective"]
+        gain = (obj - start_obj) / abs(start_obj) if start_obj else 0.0
+        if abs(obj - start_obj) < 1e-6 * max(1.0, abs(start_obj)):
+            say(f"  joint: kept its start, the static plan scheduled ({obj:,.2f}): {_counts(plan)}")
+        else:
+            say(f"  joint: {gain:+.1%} over the static plan, scheduled ({start_obj:,.2f} -> {obj:,.2f}): "
+                f"{_counts(plan)}")
+    plan.info["stages"] = {k: {x: v.get(x) for x in ("status", "seconds", "objective", "gap")}
+                           for k, v in stages.items()}
+    return plan
+
+
+JOINT_PERIODS_WARNING = 8   # more periods: the joint stage rarely improves on its start in 60 s
+
+
+def _counts(plan: Plan) -> str:
+    """Cities, districts and improvements of a plan, and how many are within the horizon."""
+    text = f"{len(plan.cities)} cities, {len(plan.districts)} districts, {len(plan.improvements)} improvements"
+    if plan.timing:
+        timed_c = sum(c in plan.timing for c in plan.cities)
+        timed_d = sum(t in plan.timing for _, t, _ in plan.districts)
+        text += f" ({timed_c} cities and {timed_d} districts within the horizon)"
+    return text
 
 
 def _solve(inst: Instance, cfg: Config, say: Progress, progress: Progress | None, record: Progress | None,
-           live: bool, stage: str, fixed: Plan | None = None) -> Plan:
+           live: bool, stage: str, fixed: Plan | None = None,
+           warm: dict[Var, float] | None = None) -> tuple[Plan, Solution]:
     """Build and solve one model; with `fixed`, its cities, districts and improvements are
-    fixed (x, z, w set to the plan's), so only the timing is left to decide."""
+    fixed (x, z, w set to the plan's), so only the timing is left to decide; with `warm`,
+    HiGHS starts from that solution."""
     say(f"[3/5] {stage}Building the model")
     start = time.perf_counter()
     m = build(inst, progress)
@@ -914,7 +914,9 @@ def _solve(inst: Instance, cfg: Config, say: Progress, progress: Progress | None
         + (", placements fixed" if fixed is not None else "") + f"   {time.perf_counter() - start:.1f} s")
     say(f"[4/5] {stage}Solving with HiGHS (time limit {cfg.solver.get('time_limit')} s, "
         f"gap {cfg.solver.get('mip_rel_gap')}); it minimises -objective")
-    sol = m.solve(cfg.solver, live=live)
+    if warm is not None:
+        say(f"  starting from the plan above (objective {sum(m.obj[m.index[k]] * v for k, v in warm.items()):,.2f})")
+    sol = m.solve(cfg.solver, live=live, start=warm)
     if record:
         record(sol.log.rstrip())   # for a log file (the terminal shows it live when live)
     say(f"  -> {sol.status} in {sol.seconds:.1f} s, objective {sol.objective:,.2f}")
@@ -937,9 +939,9 @@ def _solve(inst: Instance, cfg: Config, say: Progress, progress: Progress | None
             if sol[v] > 0.5:
                 plan.timing[c] = p
         for d, t, c in plan.districts:
-            built = [p for p in range(1, inst.periods + 1) if sol[inst.b[d, c, p]] > 0.5]
-            if built:
-                plan.timing[t] = built[0]
+            ready = [p for p in range(1, inst.periods + 1) if sol[inst.b[d, c, p]] > 0.5]
+            if ready:
+                plan.timing[t] = ready[0]
         # C1 is founded first; cities after the horizon last
         plan.cities.sort(key=lambda c: plan.timing.get(c, inst.periods + 1))
-    return plan
+    return plan, sol

@@ -1,3 +1,4 @@
-# The timed model: 6 periods of 20 turns (see [timing] in default.toml).
+# The timed model: 6 periods over 120 turns, where and when decided together (see
+# [timing] in default.toml).
 [timing]
 periods = 6

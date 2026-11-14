@@ -95,7 +95,8 @@ def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
     when = period_labels(p)
     score, parts = model.evaluate(gmap, rules, p)
     notes.append(f"{method}: score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
-                 f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}")
+                 f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}"
+                 + (f" - late {parts['late']:.1f}" if "late" in parts else ""))
     if method == "mip":
         i = p.info
         notes.append(f"HiGHS {i['status']} in {i['seconds']}s: {i['variables']} variables, {i['rows']} rows, "
@@ -143,7 +144,7 @@ def _district_yields(gmap: GameMap, rules: Rules, p: Plan, district: str, xy: XY
 def period_labels(p: Plan) -> Callable[[XY], str]:
     """For timed plans, a suffix per city/district tile: " p2" (built in period 2) or
     " later" (after the horizon); "" for static plans."""
-    if not (p.config.timing.periods and (p.timing or p.info.get("where"))):
+    if not (p.config.timing.periods and (p.timing or p.info.get("stages"))):
         return lambda xy: ""
     return lambda xy: f" p{p.timing[xy]}" if xy in p.timing else " later"
 
