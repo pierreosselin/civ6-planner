@@ -26,12 +26,14 @@ city candidates the six original cases solve to optimal in ~67 s in total (full 
 11–32 s; city spacing written as clique constraints, which made that possible). With all
 sites (the full maps' configs) and on the radius-18 maps they reach the 60 s limit: gaps
 0.016% (continents), 1.24% (shuffle-radius18), 16.5% (shuffle: one rounding plan at 11.5 s,
-then nothing; needs more time or a starting plan). Optional timing (`[timing]`, off by default; `config/timing.toml` sets 6 periods of 20
-turns): each city and district gets the period it is ready in (`Plan.timing`, tacks
-"Campus C1 p3" or "later"), under settler, build-rate, population-by-age and border
-limits, and the objective sums yields over the horizon. `mode = "sequential"` (default)
-solves the static model, then the timing with those placements fixed (0.1–2.3 s);
-`"joint"` decides both at once but stalls at the time limit on real maps.
+then nothing; needs more time or a starting plan). Optional timing (`[timing]`, off by default; `config/timing.toml` sets 6 periods over
+120 turns): each city and district gets the period it is ready in (`Plan.timing`, tacks
+"Campus C1 p3" or "later"), under a settler schedule, a build rate and border delays; the
+objective is the static one minus what is lost by being late ((p - 1)/P of a value), so
+one period gives the static plan. Solved in stages: where (static), when (placements
+fixed, < 1 s), then `mode = "joint"` (default) both together starting from that plan
+(`highspy`, which takes a start; scipy can't). Joint improves small maps (4.8% on
+continents-revealed) but often keeps its start at 60 s on radius-6 and larger.
 Kept simple on purpose: other adjacency
 between *planned* districts ("+1 per 2 districts", across cities) isn't modelled
 yet, because general coupling constraints made HiGHS slow.
@@ -99,8 +101,9 @@ In Claude's shell, which isn't activated, prefix commands with `uv run` (or call
 `.venv/bin/civ6-planner`). Run from the repo root:
 `civ6-planner {plan,view,results,make-map,watch,clear,dump,install-mod} --help`.
 Tests: `uv run python -m unittest discover -s tests`. Dependencies live in
-`pyproject.toml` (add with `uv add <pkg>`, which updates `uv.lock`); currently only
-SciPy (HiGHS via `scipy.optimize.milp`). Pierre expects to add more (other solvers,
+`pyproject.toml` (add with `uv add <pkg>`, which updates `uv.lock`); currently
+SciPy (HiGHS via `scipy.optimize.milp`) and highspy (HiGHS directly, only for solves
+with a starting plan: the timed joint solve). Pierre expects to add more (other solvers,
 libraries); keep each one justified.
 
 Skills in `.claude/skills/`: **view-map**, **plan-in-game**, **capture-test-map**,
