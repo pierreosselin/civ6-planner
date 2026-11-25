@@ -93,6 +93,21 @@ DEFAULT_IMPROVEMENTS: dict[str, ImprovementRule] = {
 }
 
 
+@dataclass
+class RegionalBuilding:
+    """A building whose yields reach every one of the player's city centres within
+    `range` tiles (Buildings.RegionalRange); a city gets each building's effect once."""
+    district: str                                          # Buildings.PrereqDistrict
+    range: int
+    yields: dict[str, int] = field(default_factory=dict)   # Building_YieldChanges
+
+
+# As in the Gathering Storm database, for when it can't be read.
+DEFAULT_REGIONAL: dict[str, RegionalBuilding] = {
+    "BUILDING_FACTORY": RegionalBuilding("DISTRICT_INDUSTRIAL_ZONE", 6, {"YIELD_PRODUCTION": 3}),
+}
+
+
 class Rules:
     def __init__(self, city_min_range: int = 3, district_range: int = 3,
                  resource_class: dict[str, str] | None = None, no_settle_features: tuple[str, ...] = (),
@@ -100,7 +115,8 @@ class Rules:
                  placement: dict[str, dict[str, int]] | None = None,
                  required_features: dict[str, set[str]] | None = None,
                  valid_terrains: dict[str, set[str]] | None = None,
-                 improvements: dict[str, ImprovementRule] | None = None):
+                 improvements: dict[str, ImprovementRule] | None = None,
+                 regional: dict[str, RegionalBuilding] | None = None):
         # A new city centre must be more than city_min_range tiles from any other.
         self.city_min_range = city_min_range
         # Districts go within district_range tiles of their city centre.
@@ -116,6 +132,8 @@ class Rules:
         self.valid_terrains = dict(valid_terrains or {})
         # Improvement -> where it may go and its yields.
         self.improvements = dict(DEFAULT_IMPROVEMENTS if improvements is None else improvements)
+        # Building -> its regional effect (district, range, yields).
+        self.regional = dict(DEFAULT_REGIONAL if regional is None else regional)
 
     @classmethod
     def from_game(cls, db_path: str = paths.GAMEPLAY_DB) -> Rules:
@@ -135,9 +153,22 @@ class Rules:
                 required_features=cls._read_sets(db, "District_RequiredFeatures", "FeatureType"),
                 valid_terrains=cls._read_sets(db, "District_ValidTerrains", "TerrainType"),
                 improvements=cls._read_improvements(db),
+                regional=cls._read_regional(db),
             )
         finally:
             db.close()
+
+    @staticmethod
+    def _read_regional(db: sqlite3.Connection) -> dict[str, RegionalBuilding]:
+        """Non-unique district buildings with a regional range and yields (Factory, power
+        plants)."""
+        out = {}
+        for b, d, r in db.execute("SELECT BuildingType, PrereqDistrict, RegionalRange FROM Buildings "
+                                  "WHERE RegionalRange > 0 AND PrereqDistrict IS NOT NULL AND TraitType IS NULL"):
+            ys = dict(db.execute("SELECT YieldType, YieldChange FROM Building_YieldChanges WHERE BuildingType = ?", (b,)))
+            if ys:
+                out[b] = RegionalBuilding(d, int(r), ys)
+        return out
 
     @staticmethod
     def _read_improvements(db: sqlite3.Connection) -> dict[str, ImprovementRule]:

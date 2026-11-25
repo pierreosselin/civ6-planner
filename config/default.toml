@@ -38,6 +38,12 @@ city_bonus = 100.0                 # per city: found the cities whenever possibl
 district_bonus = 10.0              # per district: build them whenever possible
 worked_tile_factor = 1.0           # an improved tile is worked: its own yields count this much on
                                    # top of the improvement's gain (0: only the gain counts)
+regional_buildings = []            # buildings whose yields reach every one of your city centres within
+                                   # their range, e.g. ["BUILDING_FACTORY"] (game DB: +3 production,
+                                   # 6 tiles); each city gets each one once; counted as built in every
+                                   # planned or existing district of its type. Off by default: on the
+                                   # full and radius-18 shuffle maps it leaves HiGHS 7-30% from optimal
+                                   # at 60 s, and every city is reached anyway on the test maps
 
 [objective.weights]                # value of one unit of each yield (placeholders)
 food = 2.0                         # cities must grow to get their districts

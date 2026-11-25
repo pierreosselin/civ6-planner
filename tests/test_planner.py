@@ -309,6 +309,35 @@ class OptimiserTest(unittest.TestCase):
         self.assertTrue(metrics.format_metrics(m))
 
 
+IZ = ("DISTRICT_INDUSTRIAL_ZONE",)
+
+
+class RegionalTest(unittest.TestCase):
+    def plan(self, **changes):
+        """Two cities on 2-food tiles: an Industrial Zone loses its tile (-2) and gives no
+        adjacency, so only the Factory's regional +3 production (weighted 6 per city) pays."""
+        gmap, rules = full_map({(x, y): yields(food=2) for x in range(W) for y in range(H)}), Rules()
+        cfg = dataclasses.replace(config.default(), district_bonus=0.0,
+                                  **{"regional_buildings": ("BUILDING_FACTORY",), **changes})
+        return gmap, rules, model.optimise(gmap, rules, cfg, n_cities=2, districts=IZ, improvements=())
+
+    def test_one_industrial_zone_serves_both_cities(self):
+        gmap, rules, plan = self.plan()
+        self.assertEqual(len(plan.cities), 2)
+        self.assertEqual(len(plan.districts), 1)
+        score, parts = model.evaluate(gmap, rules, plan)
+        self.assertEqual(parts["regional"], 2 * 6.0)
+        self.assertEqual(sorted(model.regional_cover(gmap, rules, plan)["BUILDING_FACTORY"]), sorted(plan.cities))
+        self.assertAlmostEqual(plan.info["objective"], score + 2 * plan.config.city_bonus, places=6)
+        (_, t, _), = plan.districts
+        self.assertTrue(all(gmap.distance(c, t) <= 6 for c in plan.cities))
+
+    def test_off_no_industrial_zone(self):
+        gmap, rules, plan = self.plan(regional_buildings=())
+        self.assertEqual(plan.districts, [])
+        self.assertEqual(model.evaluate(gmap, rules, plan)[1]["regional"], 0)
+
+
 def timed(periods=4, **timing):
     """Default settings with the timed model on (periods > 0, joint)."""
     cfg = config.default()
@@ -399,6 +428,23 @@ class TimingTest(unittest.TestCase):
         self.assertEqual(sorted(t.name for t in planner.to_tacks(gmap, rules, plan)), ["Campus C1 p2", "City C1 p1"])
         rows = metrics.plan_metrics(gmap, rules, plan)["timing"]["periods"]
         self.assertEqual([(r["cities"], r["districts"]) for r in rows], [(1, 0), (0, 1), (0, 0)])
+
+    def test_yield_curve_area_is_the_score(self):
+        # City in p1, Campus in p2: the rate steps up when the Campus is ready, and the
+        # cumulative total at the horizon / horizon turns is the timed score.
+        gmap, rules = self.mountain_map(), Rules()
+        cfg = timed(3, turns_per_district=60.0)
+        plan = model.optimise(gmap, rules, cfg, n_cities=1, districts=CAMPUS, improvements=())
+        curve = model.yield_curve(gmap, rules, plan)
+        score, _ = model.evaluate(gmap, rules, plan)
+        rates = [r["rate"] for r in curve["periods"]]
+        self.assertLess(rates[0], rates[1])
+        self.assertEqual(rates[1], rates[2])
+        self.assertAlmostEqual(rates[2], curve["full_rate"], places=2)
+        self.assertAlmostEqual(curve["periods"][-1]["cumulative"] / cfg.timing.horizon_turns, score, places=1)
+        self.assertAlmostEqual(curve["score"], score, places=2)
+        self.assertIn("start", metrics.plan_metrics(gmap, rules, plan)["yield_curve"])
+        self.assertIsNone(model.yield_curve(gmap, rules, model.optimise(gmap, rules, n_cities=1, districts=CAMPUS)))
 
 
 class ImprovementTest(unittest.TestCase):

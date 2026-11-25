@@ -33,8 +33,9 @@ With the default settings (`config/default.toml`) the optimiser:
 - gives each city up to **5 tile improvements** (Farm, Mine, Quarry, Plantation, Camp,
   Pasture, Fishing Boats, Lumber Mill), on the tiles worth working;
 - maximises the cities' site yields + the districts' adjacency bonuses + the improved
-  tiles − the yields of the tiles districts cover, with food, production and science
-  weighted most.
+  tiles − the yields of the tiles districts cover, with food, production
+  and science weighted most. Optionally (`objective.regional_buildings`), regional
+  effects too: a Factory's +3 production to every city within 6 tiles of its Industrial Zone.
 
 Placement and adjacency rules are read from the game's own database, so they follow
 the rules set and mods you play with. The full formulation is in

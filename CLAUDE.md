@@ -32,8 +32,14 @@ then nothing; needs more time or a starting plan). Optional timing (`[timing]`, 
 objective is the static one minus what is lost by being late ((p - 1)/P of a value), so
 one period gives the static plan. Solved in stages: where (static), when (placements
 fixed, < 1 s), then `mode = "joint"` (default) both together starting from that plan
-(`highspy`, which takes a start; scipy can't). Joint improves small maps (4.8% on
+(`highspy`, which takes a start; scipy can't). `model.yield_curve` gives a timed plan's
+yields per turn and cumulative per period (the timed score is its area); the metrics print
+it, with the joint stage's start, and the results page draws it. Joint improves small maps (4.8% on
 continents-revealed) but often keeps its start at 60 s on radius-6 and larger.
+Regional buildings (`objective.regional_buildings`, off by default; e.g. the Factory: +3
+production to each city within 6 tiles of an Industrial Zone, across cities): `r`/`on`
+variables and `regional_reach`; on, the big shuffle maps and continents end 7–30% from
+optimal at 60 s (worse plans than without), and every city is reached anyway on the test maps.
 Kept simple on purpose: other adjacency
 between *planned* districts ("+1 per 2 districts", across cities) isn't modelled
 yet, because general coupling constraints made HiGHS slow.

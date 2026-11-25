@@ -25,6 +25,10 @@ Objective terms (weights and bonuses in config/default.toml; placeholders to tun
                        city_bonus per city, district_bonus per district, so they're
                        placed whenever possible
 
+Regional buildings (regional_vars, regional_reach, regional_term; cfg.regional_buildings,
+off by default, e.g. the Factory; slows the big maps): a city gets the building's yields once if a planned or existing
+district of its type is within range (Factory: +3 production, 6 tiles), across cities.
+
 Not modelled yet: adjacency between *planned* districts other than a district's own
 city centre (e.g. Campus next to a planned Holy Site, or another city's centre). That
 is exact for one city with one district; with more, it needs coupling variables
@@ -104,38 +108,93 @@ def evaluate(gmap: GameMap, rules: Rules, plan: Plan, cfg: Config | None = None)
         lost += cfg.loss_factor * cfg.weighted(tile)
     for i, xy, _ in plan.improvements:
         improvements += improvement_value(rules, cfg, i, gmap.tiles[xy])
-    return site + adjacency - lost + improvements, {"site": site, "adjacency": adjacency, "lost": lost,
-                                                    "improvements": improvements, "yields": yields}
+    regional = sum(regional_value(rules, cfg, b) * len(covered)
+                   for b, covered in regional_cover(gmap, rules, plan, cfg).items())
+    return site + adjacency - lost + improvements + regional, {
+        "site": site, "adjacency": adjacency, "lost": lost, "improvements": improvements,
+        "regional": regional, "yields": yields}
+
+
+def regional_value(rules: Rules, cfg: Config, building: str) -> float:
+    """Weighted yields a regional building gives each city it reaches."""
+    return cfg.weighted(rules.regional[building].yields)
+
+
+def regional_cover(gmap: GameMap, rules: Rules, plan: Plan, cfg: Config | None = None) -> dict[str, list[XY]]:
+    """Per regional building (cfg.regional_buildings), the cities (new and existing) it
+    reaches: those with a planned or existing district of its type within its range."""
+    cfg = cfg or plan.config
+    own, _ = existing_cities(gmap)
+    cities = list(plan.cities) + [c for c in own if c not in plan.cities]
+    out = {}
+    for b in cfg.regional_buildings:
+        if b not in rules.regional:
+            continue
+        rb = rules.regional[b]
+        sources = {xy for d, xy, _ in plan.districts if d == rb.district} | _own_districts(gmap, rb.district)
+        out[b] = [c for c in cities if any(gmap.distance(c, t) <= rb.range for t in sources)]
+    return out
+
+
+def _own_districts(gmap: GameMap, district: str) -> set[XY]:
+    """Tiles holding one of the player's existing districts of this type."""
+    return {(t["x"], t["y"]) for t in gmap if t["owner"] == gmap.player and t["district"] == district}
 
 
 def _evaluate_timed(gmap: GameMap, rules: Rules, plan: Plan, cfg: Config) -> tuple[float, dict[str, Any]]:
     """evaluate() for a timed plan: the static score minus the yields lost by being late
     ("late"). The model also counts the district bonus as lost when late ("late_bonus",
     left out of the score like the bonuses): MIP objective = score + bonuses - late_bonus.
-    Something ready in period p loses (p - 1) / P of its value (city: site value;
-    district: its net value plus its bonus, if positive; improvement: from its city's founding period +
-    delay(r)); after the horizon (no period), all of it. The player's existing cities and
-    their improvements are ready from the start."""
+    Something ready in period p loses (p - 1) / P of its value (see _timed_items)."""
     score, parts = evaluate(gmap, rules, dataclasses.replace(plan, timing={}), cfg)
     P = cfg.timing.periods
+    items = _timed_items(gmap, rules, plan, cfg)
+    late = sum((k - 1) / P * v for v, _, k in items)
+    late_bonus = sum((k - 1) / P * b for _, b, k in items)
+    return score - late, {**parts, "late": late, "late_bonus": late_bonus}
+
+
+def _timed_items(gmap: GameMap, rules: Rules, plan: Plan, cfg: Config) -> list[tuple[float, float, int]]:
+    """What being late costs in a timed plan: (value, bonus, ready period) for each new
+    city (its site value), district (its net value, if positive, and the part of its bonus
+    the model counts) and new city's improvement (ready in its city's period + delay(r)).
+    Period P + 1: after the horizon. Everything else (the player's existing cities'
+    improvements, a district's negative net value) counts from period 1."""
+    P = cfg.timing.periods
+    after = P + 1
     planned: dict[XY, str] = {xy: CITY_CENTER for xy in plan.cities}
     planned.update({xy: d for d, xy, _ in plan.districts})
     improved = {xy: i for i, xy, _ in plan.improvements}
-    late = late_bonus = 0.0
-    after = P + 1   # no period: after the horizon, all of the value lost
-    for xy in plan.cities:
-        late += (plan.timing.get(xy, after) - 1) / P * site_value(gmap, gmap.tiles[xy], cfg)
+    items = [(site_value(gmap, gmap.tiles[xy], cfg), 0.0, plan.timing.get(xy, after)) for xy in plan.cities]
     for d, xy, _ in plan.districts:
         net = (cfg.weighted(rules.adjacency(gmap, gmap.tiles[xy], d, planned, improved))
                - cfg.loss_factor * cfg.weighted(gmap.tiles[xy]))
-        share = (plan.timing.get(xy, after) - 1) / P
-        late += share * max(0.0, net)
-        late_bonus += share * (max(0.0, net + cfg.district_bonus) - max(0.0, net))
+        items.append((max(0.0, net), max(0.0, net + cfg.district_bonus) - max(0.0, net), plan.timing.get(xy, after)))
     for i, xy, c in plan.improvements:
         if c in plan.cities:
-            waits = min(P, plan.timing.get(c, after) + cfg.timing.delay(gmap.distance(c, xy)) - 1)
-            late += waits / P * improvement_value(rules, cfg, i, gmap.tiles[xy])
-    return score - late, {**parts, "late": late, "late_bonus": late_bonus}
+            k = min(after, plan.timing.get(c, after) + cfg.timing.delay(gmap.distance(c, xy)))
+            items.append((improvement_value(rules, cfg, i, gmap.tiles[xy]), 0.0, k))
+    return items
+
+
+def yield_curve(gmap: GameMap, rules: Rules, plan: Plan, cfg: Config | None = None) -> dict[str, Any] | None:
+    """A timed plan's yields over the horizon, per period: the rate (weighted yields per
+    turn of what is ready by then, the static score's terms) and the cumulative total at
+    the period's end (rate times turns, summed). The timed score is the area under it:
+    cumulative at the horizon / horizon turns. None for a static plan."""
+    cfg = cfg or plan.config
+    tm = cfg.timing
+    if not (plan.timing and tm.periods):
+        return None
+    full, _ = evaluate(gmap, rules, dataclasses.replace(plan, timing={}), cfg)
+    items = _timed_items(gmap, rules, plan, cfg)
+    T, rows, total = tm.turns_per_period, [], 0.0
+    for p in range(1, tm.periods + 1):
+        rate = full - sum(v for v, _, k in items if k > p)
+        total += rate * T
+        rows.append({"period": p, "turns": [round((p - 1) * T) + 1, round(p * T)],
+                     "rate": round(rate, 2), "cumulative": round(total, 1)})
+    return {"periods": rows, "full_rate": round(full, 2), "score": round(total / (T * tm.periods), 2)}
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +235,11 @@ class Instance:
     w: dict[tuple[str, XY, XY], Var] = field(default_factory=dict)       # (i, c, t) -> improvement
     # (d, i, c, u) -> q: city c's improvement i on u touches c's district d
     q: dict[tuple[str, str, XY, XY], Var] = field(default_factory=dict)
+    # Regional buildings (cfg.regional_buildings): (building, city) -> r, the city gets
+    # the building's effect from a district of its type within range; (district, tile) ->
+    # on, a planned district of that type is on the tile (any city's).
+    r: dict[tuple[str, XY], Var] = field(default_factory=dict)
+    on: dict[tuple[str, XY], Var] = field(default_factory=dict)
     # Timing (cfg.timing.periods > 0; see the Timing section):
     f: dict[tuple[XY, int], Var] = field(default_factory=dict)           # (c, p): city c founded in period p
     b: dict[tuple[str, XY, int], Var] = field(default_factory=dict)      # (d, c, p): c's district d ready by p
@@ -260,6 +324,24 @@ def city_vars(m: Model, inst: Instance) -> None:
     """x[c] = 1: found a city on candidate tile c."""
     for c in inst.sites:
         inst.x[c] = m.var(("city", c))
+
+
+def regional_vars(m: Model, inst: Instance) -> None:
+    """r[b,c] in [0, 1]: city c (new or existing) gets regional building b's effect;
+    on[d,t] in [0, 1]: a planned district d is on tile t, whichever city it belongs to
+    (keeps the reach rows short: one term per tile, not per city). An existing city
+    already in range of one of the player's districts gets it for sure (r fixed to 1)."""
+    for b in inst.cfg.regional_buildings:
+        rb = inst.rules.regional.get(b)
+        if rb is None:
+            continue
+        existing = _own_districts(inst.gmap, rb.district)
+        for c in inst.sites + inst.own:
+            sure = c in inst.own and any(inst.gmap.distance(c, t) <= rb.range for t in existing)
+            inst.r[b, c] = m.var(("regional", b, c), lb=1 if sure else 0, integer=False)
+        for (d, c, t) in inst.z:
+            if d == rb.district and (d, t) not in inst.on:
+                inst.on[d, t] = m.var(("on", d, t), integer=False)
 
 
 def district_vars(m: Model, inst: Instance) -> None:
@@ -414,6 +496,28 @@ def improvement_bonus_link(m: Model, inst: Instance) -> None:
         m.row([(v, 1)] + [(z, -1) for z in _district_next_to(inst, d, c, u)], hi=0)
 
 
+def regional_reach(m: Model, inst: Instance) -> None:
+    """(11) A city gets a regional building's effect only if it exists and a district of
+    the building's type is within range: r[b,c] <= x[c] (new city) and
+    r[b,c] <= sum_{t within range of c} on[d,t] (unless an existing district already
+    reaches it), with on[d,t] <= sum_{c'} z[d,c',t]."""
+    by_tile: dict[tuple[str, XY], list[Var]] = {}
+    for (d, c, t), v in inst.z.items():
+        if (d, t) in inst.on:
+            by_tile.setdefault((d, t), []).append(v)
+    for key, zs in by_tile.items():
+        m.row([(inst.on[key], 1)] + [(z, -1) for z in zs], hi=0)
+    for (b, c), v in inst.r.items():
+        rb = inst.rules.regional[b]
+        if c in inst.x:
+            m.row({v: 1, inst.x[c]: -1}, hi=0)
+        if any(inst.gmap.distance(c, t) <= rb.range for t in _own_districts(inst.gmap, rb.district)):
+            continue
+        near = [inst.on[rb.district, (n["x"], n["y"])] for n in inst.gmap.within(c, rb.range)
+                if (rb.district, (n["x"], n["y"])) in inst.on]
+        m.row([(v, 1)] + [(o, -1) for o in near], hi=0)
+
+
 def not_next_to_planned_city(m: Model, inst: Instance) -> None:
     """(5) Districts that may not touch a city centre (Encampment) stay off tiles next to
     another planned city: z[d,c,t] + x[c'] <= 1 for c' next to t. (Its own city c is
@@ -531,6 +635,13 @@ def improvement_term(m: Model, inst: Instance) -> None:
     """+ (v(gain_i) + worked_tile_factor v(t)) w[i,c,t]: an improved tile is worked."""
     for (i, c, t), v in inst.w.items():
         m.add_obj(v, improvement_value(inst.rules, inst.cfg, i, inst.gmap.tiles[t]))
+
+
+def regional_term(m: Model, inst: Instance) -> None:
+    """+ g_b r[b,c]: the building's weighted yields for each city it reaches (Factory:
+    +3 production)."""
+    for (b, c), v in inst.r.items():
+        m.add_obj(v, regional_value(inst.rules, inst.cfg, b))
 
 
 def improvement_bonus_term(m: Model, inst: Instance) -> None:
@@ -766,6 +877,7 @@ VARIABLES: list[Step] = [
     neighbour_bonus_vars,
     improvement_vars,
     improvement_bonus_vars,
+    regional_vars,
     timing_vars,
 ]
 CONSTRAINTS: list[Step] = [
@@ -779,6 +891,7 @@ CONSTRAINTS: list[Step] = [
     specialty_limit,
     improvement_limit,
     improvement_bonus_link,
+    regional_reach,
     timing_link,
     settler_capacity,
     district_after_city,
@@ -793,6 +906,7 @@ OBJECTIVE: list[Step] = [
     neighbour_bonus_term,
     improvement_term,
     improvement_bonus_term,
+    regional_term,
     city_bonus_term,
     district_bonus_term,
     lateness_term,
@@ -867,6 +981,7 @@ def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: i
     say(f"  static plan: {_counts(where)}")
     plan, sol = _solve(inst, cfg, say, progress, record, live, "when: ", fixed=where)
     say(f"  static plan, scheduled: {_counts(plan)}")
+    when_curve = yield_curve(gmap, rules, plan)
     stages = {"where": where.info, "when": dict(plan.info)}
     if tm.mode == "joint" and sol.values:
         fresh = prepare(gmap, rules, cfg, n, ds, cfg.max_city_candidates, imps)
@@ -880,6 +995,7 @@ def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: i
                 f"{_counts(plan)}")
     plan.info["stages"] = {k: {x: v.get(x) for x in ("status", "seconds", "objective", "gap")}
                            for k, v in stages.items()}
+    plan.info["stages"]["when"]["curve"] = when_curve   # the static plan, scheduled: the joint stage's start
     return plan
 
 

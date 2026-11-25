@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import model
 from .gamemap import XY, GameMap
 from .model import CITY_CENTER, Plan, improvement_value, site_value
 from .rules import Rules
@@ -77,9 +78,33 @@ def plan_metrics(gmap: GameMap, rules: Rules, plan: Plan) -> dict[str, Any]:
         },
         "improvements_by_type": itypes,
         "spacing": city_spacing(gmap, plan, cities),
+        "regional": regional(gmap, rules, plan, len(cities)),
         **({"timing": timing(plan)} if plan.config.timing.periods and plan.timing is not None
            and (plan.cities or plan.districts) else {}),
+        **({"yield_curve": curve} if (curve := yield_curves(gmap, rules, plan)) else {}),
     }
+
+
+def regional(gmap: GameMap, rules: Rules, plan: Plan, n_cities: int) -> dict[str, Any]:
+    """Per regional building (Factory), how many cities it reaches and from how many
+    districts of its type."""
+    out = {}
+    for b, covered in model.regional_cover(gmap, rules, plan).items():
+        d = rules.regional[b].district
+        out[b] = {"cities_reached": len(covered), "share_of_cities": round(len(covered) / n_cities, 3) if n_cities else 0.0,
+                  "districts": sum(1 for x, _, _ in plan.districts if x == d) + len(model._own_districts(gmap, d))}
+    return out
+
+
+def yield_curves(gmap: GameMap, rules: Rules, plan: Plan) -> dict[str, Any] | None:
+    """Timed plans: the plan's yield curve (model.yield_curve: per period, yields per turn
+    and the cumulative total), and, after a joint solve, its start's (the static plan,
+    scheduled) as "start", to compare."""
+    curve = model.yield_curve(gmap, rules, plan)
+    if curve is None:
+        return None
+    start = plan.info.get("stages", {}).get("when", {}).get("curve")
+    return {**curve, **({"start": start} if start and plan.config.timing.mode == "joint" else {})}
 
 
 def timing(plan: Plan) -> dict[str, Any]:
@@ -158,6 +183,12 @@ def format_summary(m: dict[str, Any]) -> list[str]:
                          for r in t["periods"])
         lines += ["  timing: new cities (c) and districts (d) per period", *_wrap(per.split(" · ")),
                   f"    after the horizon: {t['later']['cities']} cities, {t['later']['districts']} districts"]
+    if m.get("yield_curve"):
+        lines += _curve_lines(m["yield_curve"])
+    for b, r in m.get("regional", {}).items():
+        lines.append(f"  regional: {b.removeprefix('BUILDING_').replace('_', ' ').title()} reaches "
+                     f"{r['cities_reached']} cities ({r['share_of_cities']:.0%}) from {r['districts']} "
+                     f"{'district' if r['districts'] == 1 else 'districts'}")
     s = m.get("spacing", {})
     if s.get("nearest_city"):
         nc, ap = s["nearest_city"], s["all_pairs"]
@@ -168,6 +199,20 @@ def format_summary(m: dict[str, Any]) -> list[str]:
                   f"(min {top['min']}, max {top['max']})"
                   + (f" · nearest other player's city: mean {s['nearest_foreign_city']['mean']}, "
                      f"min {s['nearest_foreign_city']['min']}" if s.get("nearest_foreign_city") else "")]
+    return lines
+
+
+def _curve_lines(c: dict[str, Any]) -> list[str]:
+    """The yield curve: per period, yields per turn and the cumulative total, for the plan
+    and (after a joint solve) its start."""
+    def row(curve: dict[str, Any]) -> list[str]:
+        return [f"p{r['period']} {r['rate']:,.1f}/turn ({r['cumulative']:,.0f})" for r in curve["periods"]]
+    lines = [f"  yields over time: per turn by period (cumulative); everything built: {c['full_rate']:,.1f}/turn",
+             *_wrap(row(c))]
+    if c.get("start"):
+        s = c["start"]
+        lines += [f"  the static plan, scheduled (the joint stage's start; everything built: "
+                  f"{s['full_rate']:,.1f}/turn):", *_wrap(row(s))]
     return lines
 
 

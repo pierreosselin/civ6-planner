@@ -106,7 +106,8 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         say("[5/5] Result")
         if parts:
             say(f"  score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
-                f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}"
+                f" + improvements {parts['improvements']:.1f} + regional {parts['regional']:.1f}"
+                f" - covered tiles {parts['lost']:.1f}"
                  + (f" - late {parts['late']:.1f}" if "late" in parts else ""))
         for line in metrics.format_summary(stats):
             say(line)
@@ -183,11 +184,45 @@ def _index(summary: dict[str, Any], run_name: str) -> str:
         cards.append(f"""<section class="card">
   <div class="head"><h2>{e(r['name'])}</h2><span><a class="btn" href="{e(r['log'])}">Log</a> · <a class="btn" href="{e(r['map'])}">Open map →</a></span></div>
   <p class="muted">{e(r['description'])} · {r['tiles']} tiles · <b>score {r['score']}</b></p>
+  {_chart(r["metrics"].get("yield_curve"))}
   <table><thead><tr><th>Tack</th><th>Tile</th><th>Terrain</th></tr></thead><tbody>{rows}</tbody></table>
   <ul>{notes}</ul>
 </section>""")
     return _INDEX.replace("__RUN__", e(run_name)).replace("__SEED__", e(f'{summary["method"]} planner, seed {summary["seed"]}')) \
         .replace("__CARDS__", "\n".join(cards))
+
+
+def _chart(curve: dict[str, Any] | None) -> str:
+    """Timed plans: the cumulative yields over the horizon as a small SVG chart, the plan
+    against its start (the static plan, scheduled) after a joint solve; "" otherwise."""
+    if not curve:
+        return ""
+    series = [("plan", curve)] + ([("start", curve["start"])] if curve.get("start") else [])
+    W, H, L, B, top = 300, 130, 46, 20, 8
+    end = curve["periods"][-1]["turns"][1]
+    peak = max(r["cumulative"] for _, c in series for r in c["periods"]) or 1.0
+    X = lambda t: L + (W - L - 6) * t / end
+    Y = lambda v: H - B - (H - B - top) * v / peak
+    lines = []
+    for cls, c in reversed(series):
+        pts = [(0.0, 0.0)] + [(float(r["turns"][1]), float(r["cumulative"])) for r in c["periods"]]
+        lines.append(f'<polyline class="{cls}" points="{" ".join(f"{X(t):.1f},{Y(v):.1f}" for t, v in pts)}"/>')
+    ticks = "".join(f'<line class="grid" x1="{X(r["turns"][1]):.1f}" x2="{X(r["turns"][1]):.1f}" y1="{top}" y2="{H - B}"/>'
+                    for r in curve["periods"][:-1])
+    labels = (f'<text x="{L - 4}" y="{top + 8}" text-anchor="end">{peak:,.0f}</text>'
+              f'<text x="{L - 4}" y="{H - B}" text-anchor="end">0</text>'
+              f'<text x="{L}" y="{H - 4}">turn 0</text>'
+              f'<text x="{W - 6}" y="{H - 4}" text-anchor="end">{end}</text>')
+    legend = f'<span class="key plan"></span>this plan {curve["periods"][-1]["cumulative"]:,.0f}'
+    if curve.get("start"):
+        legend += (f' · <span class="key start"></span>static plan, scheduled '
+                   f'{curve["start"]["periods"][-1]["cumulative"]:,.0f}')
+    rates = " · ".join(f'p{r["period"]} {r["rate"]:,.0f}' for r in curve["periods"])
+    return (f'<figure class="chart"><figcaption>Cumulative yields (weighted) over the horizon</figcaption>'
+            f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Cumulative yields per turn">'
+            f'<line class="axis" x1="{L}" x2="{W - 6}" y1="{H - B}" y2="{H - B}"/>'
+            f'<line class="axis" x1="{L}" x2="{L}" y1="{top}" y2="{H - B}"/>{ticks}{"".join(lines)}{labels}</svg>'
+            f'<p class="muted">{legend}<br>per turn by period: {rates}</p></figure>')
 
 
 def _short(type_name: str | None) -> str:
@@ -218,6 +253,18 @@ _INDEX = """<!doctype html>
   table { width:100%; border-collapse:collapse; font-size:13px; margin:8px 0; }
   th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
   th { font-weight:600; color:var(--muted); font-size:12px; }
+  .chart { margin:10px 0 4px; }
+  .chart figcaption { font-size:12px; color:var(--muted); }
+  .chart svg { width:100%; height:auto; display:block; }
+  .chart svg text { font-size:9px; fill:var(--muted); }
+  .chart .axis { stroke:var(--line); }
+  .chart .grid { stroke:var(--line); stroke-dasharray:2 3; }
+  .chart polyline { fill:none; stroke-width:2; }
+  .chart polyline.plan { stroke:var(--accent); }
+  .chart polyline.start { stroke:var(--muted); stroke-dasharray:4 3; }
+  .chart .key { display:inline-block; width:14px; height:0; border-top:2px solid var(--accent); vertical-align:middle; margin-right:4px; }
+  .chart .key.start { border-top:2px dashed var(--muted); }
+  .chart p { margin:2px 0 0; }
   ul { padding-left:18px; margin:6px 0 0; font-size:12px; color:var(--muted); }
 </style></head>
 <body><main>

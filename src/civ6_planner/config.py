@@ -59,6 +59,7 @@ class Config:
     city_bonus: float
     district_bonus: float
     weights: dict[str, float]      # YIELD_* -> value of one unit
+    regional_buildings: tuple[str, ...]  # buildings whose yields reach cities within their range
     solver: dict[str, Any]         # scipy.optimize.milp options
     timing: Timing = field(default_factory=Timing)          # periods = 0: static model
     sources: list[str] = field(default_factory=list)       # files read, in order
@@ -98,6 +99,7 @@ def load(*paths: str | None) -> Config:
         site_radius=o["site_radius"], loss_factor=o["loss_factor"],
         city_bonus=o["city_bonus"], district_bonus=o["district_bonus"],
         weights={"YIELD_" + k.upper(): float(v) for k, v in o["weights"].items()},
+        regional_buildings=tuple(o["regional_buildings"]),
         solver=dict(raw["solver"]), sources=files, raw=raw,
         timing=_timing(raw["timing"]))
 

@@ -95,7 +95,8 @@ def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
     when = period_labels(p)
     score, parts = model.evaluate(gmap, rules, p)
     notes.append(f"{method}: score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
-                 f" + improvements {parts['improvements']:.1f} - covered tiles {parts['lost']:.1f}"
+                 f" + improvements {parts['improvements']:.1f} + regional {parts['regional']:.1f}"
+                 f" - covered tiles {parts['lost']:.1f}"
                  + (f" - late {parts['late']:.1f}" if "late" in parts else ""))
     if method == "mip":
         i = p.info

@@ -70,7 +70,7 @@ checked against each other. Defaults are those of <code>config/default.toml</cod
 </ul>
 <p>so as to maximise the weighted yields of the city sites, the districts' adjacency bonuses and the improved (worked)
 tiles, minus the yields of the tiles the districts cover. The game's placement rules are enforced partly by which variables exist (sets \(C\) and
-\(R_{d,c}\), \(G_{i,c}\)) and partly by linear constraints (1)–(10).</p>
+\(R_{d,c}\), \(G_{i,c}\)) and partly by linear constraints (1)–(11).</p>
 <p>The model is built in three steps, each a list of small functions in <code>model.py</code>:
 <code>VARIABLES</code>, <code>CONSTRAINTS</code>, <code>OBJECTIVE</code>. Commenting out a line drops that constraint or term;
 each run's log lists the ones that were on.</p>
@@ -281,6 +281,27 @@ $$
 \(y=\min\big(z_{d,c,t},\ \sum_{u} z_{d',c,u}\big)\in\{0,1\}\). Only the city's own \(d'\) is counted: one per city, so the
 count is 0 or 1 and the rule's floor is exact.</p>
 
+<h3>Regional buildings</h3>
+<p>Some district buildings give their yields to every one of the player's city centres within a range: the Factory, +3
+production to each city within 6 tiles of its Industrial Zone (<code>Buildings.RegionalRange</code>,
+<code>Building_YieldChanges</code>). A city gets each building's effect once, however many reach it. For each building
+\(b\in\mathcal{G}\) (<code>objective.regional_buildings</code>), with district \(d_b\), range \(r_b\) and weighted yields
+\(g_b\) (Factory: \(g=6\)), let \(P_b\) be the tiles holding one of the player's existing \(d_b\) and
+\(W_b=\{t:\ (d_b,c,t)\in Z \text{ for some } c\}\) the tiles where one may be planned. The building is assumed built in
+every planned or existing \(d_b\).</p>
+<div class="card">
+$$
+\begin{aligned}
+o_{b,t} &\in [0,1] && t\in W_b && \text{a planned } d_b \text{ is on } t \text{ (any city's)} && \texttt{regional\_vars}\\
+r_{b,c} &\in [0,1] && c\in C\cup E && \text{city } c \text{ gets } b\text{'s effect} && \texttt{regional\_vars}
+\end{aligned}
+$$
+</div>
+<p class="muted">Continuous: with (11) and a positive coefficient, at an optimum
+\(r_{b,c}=\min\big(x_c,\ \sum_{t\in N_{r_b}(c)} o_{b,t}\big)\in\{0,1\}\) for integer \(z\). An existing city within \(r_b\) of a
+tile of \(P_b\) has \(r_{b,e}=1\) fixed. The \(o\) variables keep the reach rows short: one term per tile within range
+instead of one per (city, tile).</p>
+
 <h2 id="objective">8. Objective</h2>
 <p>Maximise</p>
 <div class="card">
@@ -291,6 +312,7 @@ f(x,z) \;=\; \underbrace{\sum_{c\in C} s_c\,x_c}_{\texttt{site\_term}}
 \;+\; \underbrace{\sum b_{d,d'}\,y_{d,d',c,t}}_{\texttt{neighbour\_bonus\_term}}
 \;+\; \underbrace{\sum_{Q} h_{i,t}\,\omega_{i,c,t}}_{\texttt{improvement\_term}}
 \;+\; \underbrace{\sum e_{d,i}\,q_{d,i,c,u}}_{\texttt{improvement\_bonus\_term}}
+\;+\; \underbrace{\sum g_b\,r_{b,c}}_{\texttt{regional\_term}}
 \;+\; \underbrace{\beta_C\sum_{c\in C} x_c}_{\texttt{city\_bonus\_term}}
 \;+\; \underbrace{\beta_D\!\!\sum_{(d,c,t)\in Z}\!\! z_{d,c,t}}_{\texttt{district\_bonus\_term}}
 $$
@@ -381,12 +403,24 @@ $$ q_{d,i,c,u} \;\le\; \omega_{i,c,u}, \qquad q_{d,i,c,u} \;\le\; \sum_{t\in N_1
 improvements next to the city's \(d\). (A first form with one variable per district tile and a bound of 6 left the full
 maps 12% from optimal at the time limit.)</p>
 
+<h3><span class="tag">(11)</span>Regional effect only within range of a planned or existing district · <code>regional_reach</code></h3>
+$$ o_{b,t} \;\le\; \sum_{c:\,(d_b,c,t)\in Z} z_{d_b,c,t}, \qquad r_{b,c} \;\le\; x_c\ \ (c\in C), \qquad
+r_{b,c} \;\le\; \sum_{t\in N_{r_b}(c)\cap W_b} o_{b,t}\ \ \text{unless } N_{r_b}(c)\cap P_b\ne\emptyset . $$
+<p class="muted">\(N_{r}(c)\): tiles within \(r\) of \(c\). The first sum has at most one non-zero term at an integer point,
+by (4). This is the model's only coupling between cities' districts: one Industrial Zone can serve several cities, so
+the model may build fewer, centrally, and keep cities within 6 tiles of one.<br>
+<b>Off by default.</b> With the Factory on, the revealed, radius-6 and continents-radius18 maps still solve to optimal
+(5–46 s), but shuffle-radius18, continents and shuffle end 30%, 7% and 19% from optimal at 60 s, with worse plans than
+without it, although the plan solved without it is feasible and reaches every city (on all eight test maps every city
+ends up within 6 tiles of an Industrial Zone anyway). Commenting out (11) alone restores the solve times, so the rows
+(11) are the cost. A start from the plan without it (as for timing) would fix that.</p>
+
 <h2 id="full">10. The full programme</h2>
 <div class="card">
 $$
 \begin{aligned}
 \max_{x,\,z,\,y,\,\omega,\,q}\quad & \sum_{c\in C}(s_c+\beta_C)\,x_c \;+\; \sum_{(d,c,t)\in Z}\big(a_{d,c,t}-\lambda\,v(t)+\beta_D\big)\,z_{d,c,t}
-\;+\; \sum b_{d,d'}\,y_{d,d',c,t} \;+\; \sum_Q h_{i,t}\,\omega_{i,c,t} \;+\; \sum e_{d,i}\,q_{d,i,c,u}\\[4pt]
+\;+\; \sum b_{d,d'}\,y_{d,d',c,t} \;+\; \sum_Q h_{i,t}\,\omega_{i,c,t} \;+\; \sum e_{d,i}\,q_{d,i,c,u} \;+\; \sum g_b\,r_{b,c}\\[4pt]
 \text{s.t.}\quad & \textstyle\sum_{c\in C} x_c \le n && (1)\\
 & \textstyle\sum_{c\in Q} x_c \le 1 \ \ \forall Q\in\mathcal{Q}, \qquad x_a+x_b\le 1 \ \ \forall\{a,b\}\in U && (2)\\
 & \textstyle\sum_{t\in R_{d,c}} z_{d,c,t} \le x_c \ \ \forall c\in C,\, d\in D && (3a)\\
@@ -398,7 +432,8 @@ $$
 & \textstyle\sum_{d\in D^{\text{pop}},\,t} z_{d,c,t} \le K x_c \ \forall c\in C, \qquad \sum_{d\in D^{\text{pop}},\,t} z_{d,e,t} \le \max(0,K-\beta_e) \ \forall e\in E && (8)\\
 & \textstyle\sum_{(i,t)} \omega_{i,c,t} \le L x_c,\ \sum_i \omega_{i,c,t}\le x_c \ \forall c\in C, \qquad \sum_{(i,t)} \omega_{i,e,t} \le \max(0,L-\ell_e) \ \forall e\in E && (9)\\
 & q_{d,i,c,u} \le \omega_{i,c,u},\ \ q_{d,i,c,u} \le \textstyle\sum_{t\in N_1(u)\cap R_{d,c}} z_{d,c,t} && (10)\\
-& x\in\{0,1\}^{C},\quad z\in\{0,1\}^{Z},\quad \omega\in\{0,1\}^{Q},\quad y, q\in[0,1]
+& o_{b,t} \le \textstyle\sum_c z_{d_b,c,t},\ \ r_{b,c} \le x_c,\ \ r_{b,c} \le \sum_{t\in N_{r_b}(c)} o_{b,t} \ (\text{unless reached by } P_b) && (11)\\
+& x\in\{0,1\}^{C},\quad z\in\{0,1\}^{Z},\quad \omega\in\{0,1\}^{Q},\quad y, q, o, r\in[0,1]
 \end{aligned}
 $$
 </div>
@@ -424,7 +459,8 @@ $$
 <p>The <b>score</b> reported for a plan leaves the bonuses out and is recomputed in plain Python by <code>evaluate</code>,
 for any plan (the MIP's or the greedy stub's):</p>
 $$ S \;=\; \sum_{c\ \text{new}} s_c \;+\; \sum_{(d,c,t)\ \text{planned}} v\big(A_{d,\cdot}(t;\Pi^{\text{all}})\big) \;-\; \lambda\!\!\sum_{(d,c,t)\ \text{planned}}\!\! v(t)
-\;+\; \sum_{(i,c,t)\ \text{planned}} h_{i,t}, $$
+\;+\; \sum_{(i,c,t)\ \text{planned}} h_{i,t}
+\;+\; \sum_{b\in\mathcal{G}} g_b\,\big|\{c \text{ new or existing}:\ \delta(c,t)\le r_b \text{ for a planned or existing } d_b \text{ on } t\}\big|, $$
 <p>where \(\Pi^{\text{all}}\) holds <i>every</i> planned city centre, district and improvement. (Mines and lumber mills count
 with the game's floor here, \(\lfloor\text{count}/2\rfloor\), against \(0.5\) each in the MIP, so \(S\) can be slightly
 below the MIP's value for an odd count.) Every predicate is monotone in \(\Pi\),
@@ -451,6 +487,7 @@ the values used.</p>
   <tr><td>\(w_k\)</td><td><code>objective.weights</code></td><td>food 2, production 2, gold 0.5, science 2, culture 0.5, faith 0.5</td><td>Value of one unit of each yield (placeholders; food, production and science first for now: cities must grow to get their districts)</td></tr>
   <tr><td>\(\sigma\)</td><td><code>objective.site_radius</code></td><td>2</td><td>Radius of the site value</td></tr>
   <tr><td>\(\lambda\)</td><td><code>objective.loss_factor</code></td><td>0.5</td><td>Share of a covered tile's yields counted as lost</td></tr>
+  <tr><td>\(\mathcal{G}\)</td><td><code>objective.regional_buildings</code></td><td><code>[]</code> (off)</td><td>Buildings whose yields reach every city within their range (§7), e.g. <code>["BUILDING_FACTORY"]</code></td></tr>
   <tr><td>\(\beta_C\)</td><td><code>objective.city_bonus</code></td><td>100</td><td>Per new city</td></tr>
   <tr><td>\(\beta_D\)</td><td><code>objective.district_bonus</code></td><td>10</td><td>Per district</td></tr>
   <tr><td>\(H\), \(\Theta\)</td><td><code>timing.periods</code>, <code>timing.horizon_turns</code></td><td>0 (off), 120</td><td>Timed model (§15): periods over the horizon, \(\theta=\Theta/H\) turns each</td></tr>
@@ -607,13 +644,27 @@ slightly.)<br>
 (Test <code>test_one_period_is_the_static_model</code>: equal objectives.) With more periods, timing moves the placements: a
 tile that can be ready sooner loses less.</p>
 
+<p><b>The yield curve</b> (<code>model.yield_curve</code>, in the metrics and as a chart on the results page). For a
+plan, let \(v_k\) be the value of item \(k\) (a city's \(s_c\), a district's \(\max(0,A_{d,c})\) without \(\beta_D\), an
+improvement's \(h_{i,t}\)) and \(p_k\) the period it is ready in (Proposition 1; \(H+1\) after the horizon). The
+<i>rate</i> in period \(p\), the weighted yields per turn of what is ready by then, and the <i>cumulative</i> yields at
+the end of period \(p\) are
+$$ R_p=f^{\text{score}}-\sum_{k:\,p_k>p}v_k,\qquad C_p=\theta\sum_{q\le p}R_q, $$
+with \(f^{\text{score}}\) the static score of the same placements (the bonuses left out; what never waits, such as a district's
+negative net value or the player's existing cities' improvements, counts from period 1). By Proposition 1,
+$$ \frac{C_H}{\Theta}=\frac1H\sum_{p=1}^{H}R_p=f^{\text{score}}-\sum_k\frac{p_k-1}{H}\,v_k , $$
+which is the timed score: <b>the model maximises the area under this curve</b> (plus the bonuses), i.e. the cumulative
+yields at the horizon, every turn counting the same. The curve shows how a plan gets there: one that is quick to build
+rises early, one that is better once built rises later; after a joint solve its start (the static plan, scheduled) is
+drawn too. (Test <code>test_yield_curve_area_is_the_score</code>.)</p>
+
 <h3>The timed programme</h3>
 <div class="card">
 $$
 \begin{aligned}
 \max\quad & f(x,z,y,\omega,q)\;-\;\frac1H\sum_{p\in\mathcal H}\Big[\sum_{c\in C}s_c(x_c-\Phi_{c,p})+\sum_{(d,c)}\chi_{d,c,p}
 +\sum_{(i,c,t)\in Q,\,c\in C}h_{i,t}(\omega_{i,c,t}-\gamma_{i,c,t,p})\Big]\\[4pt]
-\text{s.t.}\quad & \text{(1)–(10) of \S 10}\\
+\text{s.t.}\quad & \text{(1)–(11) of \S 10}\\
 & \textstyle\sum_p\phi_{c,p}\le x_c,\quad \psi_{d,c,p-1}\le\psi_{d,c,p},\quad \psi_{d,c,H}\le\sum_t z_{d,c,t} && \text{(T1)}\\
 & \textstyle\sum_{c\in C}\Phi_{c,p}\le\bar n_p && \text{(T2)}\\
 & \psi_{d,c,p}\le\Phi_{c,p}\quad(c\in C) && \text{(T3)}\\
@@ -629,7 +680,7 @@ $$
 <p class="muted">Size: \(H|C|\) of \(\phi\), \(H\) per (district, city) of \(\psi\) and \(\chi\), at most \(H\) per new city's
 improvement option of \(\gamma\). Rows: \(|C|\) + \(H\) + 1 per (district, city) for (T1); \(\le H\) for (T2); \(H\) per
 (district, new city) for (T3); \(H\) per city for (T4); \(H\) per (district, new city, delayed ring) for (T5); \(H\) per
-\(\chi\) and two per \(\gamma\) for (T6). The only big-M is \(\bar A\) in (T6), and it sits on a penalty: rows (1)–(10)
+\(\chi\) and two per \(\gamma\) for (T6). The only big-M is \(\bar A\) in (T6), and it sits on a penalty: rows (1)–(11)
 are unchanged, and lateness only corrects the objective.</p>
 
 <h3>Solving · <code>timing.mode</code></h3>
