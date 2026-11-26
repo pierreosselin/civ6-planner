@@ -14,7 +14,7 @@ description: Run the planner on the user's live Civ VI game and get its tacks on
    civ6-planner plan              # writes Mods/mapdump/ui/mapdump_plan.lua
    civ6-planner plan --dry-run    # print only
    ```
-   The default planner is the MIP (`model.py`); it's deterministic and prints its
+   The default planner is the MIP (`model/`); it's deterministic and prints its
    score and HiGHS status in the notes. `--planner greedy` runs the old random stub
    (`--seed N` makes it repeatable). `watch [--planner …]` re-plans after every save.
    `clear` writes an empty plan (Ctrl+Shift+T then removes our tacks).

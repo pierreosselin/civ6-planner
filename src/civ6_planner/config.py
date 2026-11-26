@@ -22,29 +22,6 @@ YIELDS = ["YIELD_FOOD", "YIELD_PRODUCTION", "YIELD_GOLD", "YIELD_SCIENCE", "YIEL
 
 
 @dataclass
-class Timing:
-    """The [timing] table: periods = 0 is the static model (everything at once). Speeds
-    are in turns; the model turns them into periods of turns_per_period turns."""
-    periods: int = 0
-    mode: str = "joint"                 # "joint": where and when together; "sequential": where, then when
-    horizon_turns: int = 120           # the horizon, cut into `periods` equal periods
-    settlers_at_start: int = 1          # new cities that can be founded at once
-    turns_per_settler: float = 40.0     # then each city trains a settler every this many turns
-    turns_per_district: float = 20.0    # turns a city needs per district
-    ring_delay_turns: tuple[float, ...] = (0, 0, 15, 35)   # by distance from the city: turns before usable
-
-    @property
-    def turns_per_period(self) -> float:
-        return self.horizon_turns / self.periods if self.periods else float(self.horizon_turns)
-
-    def delay(self, r: int) -> int:
-        """Periods after founding before a tile at distance r is usable (rounded down, so
-        one long period has no delay)."""
-        turns = self.ring_delay_turns[min(r, len(self.ring_delay_turns) - 1)]
-        return int(turns // self.turns_per_period)
-
-
-@dataclass
 class Config:
     n_cities: int | str            # a number, or "max": as many as fit
     districts: tuple[str, ...]     # district types, e.g. DISTRICT_CAMPUS
@@ -61,7 +38,6 @@ class Config:
     weights: dict[str, float]      # YIELD_* -> value of one unit
     regional_buildings: tuple[str, ...]  # buildings whose yields reach cities within their range
     solver: dict[str, Any]         # scipy.optimize.milp options
-    timing: Timing = field(default_factory=Timing)          # periods = 0: static model
     sources: list[str] = field(default_factory=list)       # files read, in order
     raw: dict[str, Any] = field(default_factory=dict)      # the merged TOML, for logs
 
@@ -100,18 +76,7 @@ def load(*paths: str | None) -> Config:
         city_bonus=o["city_bonus"], district_bonus=o["district_bonus"],
         weights={"YIELD_" + k.upper(): float(v) for k, v in o["weights"].items()},
         regional_buildings=tuple(o["regional_buildings"]),
-        solver=dict(raw["solver"]), sources=files, raw=raw,
-        timing=_timing(raw["timing"]))
-
-
-def _timing(t: dict[str, Any]) -> Timing:
-    if t["mode"] not in ("sequential", "joint"):
-        raise ValueError(f"timing.mode must be sequential or joint, not {t['mode']!r}")
-    return Timing(periods=int(t["periods"]), mode=t["mode"], horizon_turns=int(t["horizon_turns"]),
-                  settlers_at_start=int(t["settlers_at_start"]), turns_per_settler=float(t["turns_per_settler"]),
-                  turns_per_district=float(t["turns_per_district"]),
-                  ring_delay_turns=tuple(float(v) for v in t["ring_delay_turns"]))
-
+        solver=dict(raw["solver"]), sources=files, raw=raw)
 
 
 def _value(v: Any) -> str:

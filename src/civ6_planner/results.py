@@ -12,16 +12,14 @@ read and checked on the map without opening Civ VI.
 """
 from __future__ import annotations
 
-import html
 import json
 import os
 import random
 import time
 from typing import Any, Callable
 
-from . import config, dataset, metrics, model, paths, planner, validate, viewer
+from . import config, dataset, metrics, model, paths, planner, results_page, validate, viewer
 from .gamemap import GameMap
-from .model import Plan
 from .planner import Tack
 from .rules import Rules
 
@@ -107,8 +105,7 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         if parts:
             say(f"  score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
                 f" + improvements {parts['improvements']:.1f} + regional {parts['regional']:.1f}"
-                f" - covered tiles {parts['lost']:.1f}"
-                 + (f" - late {parts['late']:.1f}" if "late" in parts else ""))
+                f" - covered tiles {parts['lost']:.1f}")
         for line in metrics.format_summary(stats):
             say(line)
         for line in validate.format_check(check):
@@ -123,7 +120,7 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=1)
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
-        f.write(_index(summary, os.path.basename(os.path.normpath(out_dir))))
+        f.write(results_page.index(summary, os.path.basename(os.path.normpath(out_dir))))
     with open(os.path.join(out_dir, "run.log"), "w") as f:
         f.write("\n".join(run_lines + summary_lines(summary, out_dir)) + "\n")
     return summary
@@ -169,109 +166,3 @@ def _where(sc_dir: str) -> list[str]:
     if not rel.startswith(".."):
         out.append(f"  Live Server: http://127.0.0.1:5500/{rel}")
     return out
-
-
-def _index(summary: dict[str, Any], run_name: str) -> str:
-    e = html.escape
-    cards = []
-    for r in summary["scenarios"]:
-        rows = "".join(
-            f"<tr><td>{e(t['name'])}{''.join(f' +{v} {_short(k).lower()}' for k, v in t.get('yields', {}).items())}</td><td>({t['x']}, {t['y']})</td>"
-            f"<td>{e(_short(t['tile'].get('terrain')))}{' · ' + e(_short(t['tile']['feature'])) if t['tile'].get('feature') not in (None, 'NONE') else ''}"
-            f"{' · ' + e(_short(t['tile']['resource'])) if t['tile'].get('resource') not in (None, 'NONE') else ''}</td></tr>"
-            for t in r["tacks"]) or '<tr><td colspan="3" class="muted">no tacks placed</td></tr>'
-        notes = "".join(f"<li>{e(n)}</li>" for n in r["notes"])
-        cards.append(f"""<section class="card">
-  <div class="head"><h2>{e(r['name'])}</h2><span><a class="btn" href="{e(r['log'])}">Log</a> · <a class="btn" href="{e(r['map'])}">Open map →</a></span></div>
-  <p class="muted">{e(r['description'])} · {r['tiles']} tiles · <b>score {r['score']}</b></p>
-  {_chart(r["metrics"].get("yield_curve"))}
-  <table><thead><tr><th>Tack</th><th>Tile</th><th>Terrain</th></tr></thead><tbody>{rows}</tbody></table>
-  <ul>{notes}</ul>
-</section>""")
-    return _INDEX.replace("__RUN__", e(run_name)).replace("__SEED__", e(f'{summary["method"]} planner, seed {summary["seed"]}')) \
-        .replace("__CARDS__", "\n".join(cards))
-
-
-def _chart(curve: dict[str, Any] | None) -> str:
-    """Timed plans: the cumulative yields over the horizon as a small SVG chart, the plan
-    against its start (the static plan, scheduled) after a joint solve; "" otherwise."""
-    if not curve:
-        return ""
-    series = [("plan", curve)] + ([("start", curve["start"])] if curve.get("start") else [])
-    W, H, L, B, top = 300, 130, 46, 20, 8
-    end = curve["periods"][-1]["turns"][1]
-    peak = max(r["cumulative"] for _, c in series for r in c["periods"]) or 1.0
-    X = lambda t: L + (W - L - 6) * t / end
-    Y = lambda v: H - B - (H - B - top) * v / peak
-    lines = []
-    for cls, c in reversed(series):
-        pts = [(0.0, 0.0)] + [(float(r["turns"][1]), float(r["cumulative"])) for r in c["periods"]]
-        lines.append(f'<polyline class="{cls}" points="{" ".join(f"{X(t):.1f},{Y(v):.1f}" for t, v in pts)}"/>')
-    ticks = "".join(f'<line class="grid" x1="{X(r["turns"][1]):.1f}" x2="{X(r["turns"][1]):.1f}" y1="{top}" y2="{H - B}"/>'
-                    for r in curve["periods"][:-1])
-    labels = (f'<text x="{L - 4}" y="{top + 8}" text-anchor="end">{peak:,.0f}</text>'
-              f'<text x="{L - 4}" y="{H - B}" text-anchor="end">0</text>'
-              f'<text x="{L}" y="{H - 4}">turn 0</text>'
-              f'<text x="{W - 6}" y="{H - 4}" text-anchor="end">{end}</text>')
-    legend = f'<span class="key plan"></span>this plan {curve["periods"][-1]["cumulative"]:,.0f}'
-    if curve.get("start"):
-        legend += (f' · <span class="key start"></span>static plan, scheduled '
-                   f'{curve["start"]["periods"][-1]["cumulative"]:,.0f}')
-    rates = " · ".join(f'p{r["period"]} {r["rate"]:,.0f}' for r in curve["periods"])
-    return (f'<figure class="chart"><figcaption>Cumulative yields (weighted) over the horizon</figcaption>'
-            f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Cumulative yields per turn">'
-            f'<line class="axis" x1="{L}" x2="{W - 6}" y1="{H - B}" y2="{H - B}"/>'
-            f'<line class="axis" x1="{L}" x2="{L}" y1="{top}" y2="{H - B}"/>{ticks}{"".join(lines)}{labels}</svg>'
-            f'<p class="muted">{legend}<br>per turn by period: {rates}</p></figure>')
-
-
-def _short(type_name: str | None) -> str:
-    """TERRAIN_GRASS_HILLS -> Grass hills."""
-    if not type_name:
-        return ""
-    return type_name.split("_", 1)[-1].replace("_", " ").capitalize()
-
-
-_INDEX = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Planner results</title>
-<style>
-  :root { --bg:#f7f6f2; --panel:#ffffff; --ink:#1f1e1b; --muted:#6b6963; --line:#dddbd3; --accent:#2f5fb3; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#1a1a19; --panel:#242422; --ink:#f0efec; --muted:#a3a29b; --line:#3a3a37; --accent:#8fb0ec; } }
-  * { box-sizing: border-box; }
-  body { margin:0; padding:24px 16px; font:14px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
-  main { max-width:1100px; margin:0 auto; }
-  h1 { font-size:20px; margin:0 0 4px; }
-  h2 { font-size:15px; margin:0; }
-  .muted { color:var(--muted); font-size:12px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:14px; margin-top:18px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
-  .head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
-  .btn { color:var(--accent); text-decoration:none; font-size:13px; white-space:nowrap; }
-  .btn:hover { text-decoration:underline; }
-  table { width:100%; border-collapse:collapse; font-size:13px; margin:8px 0; }
-  th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); }
-  th { font-weight:600; color:var(--muted); font-size:12px; }
-  .chart { margin:10px 0 4px; }
-  .chart figcaption { font-size:12px; color:var(--muted); }
-  .chart svg { width:100%; height:auto; display:block; }
-  .chart svg text { font-size:9px; fill:var(--muted); }
-  .chart .axis { stroke:var(--line); }
-  .chart .grid { stroke:var(--line); stroke-dasharray:2 3; }
-  .chart polyline { fill:none; stroke-width:2; }
-  .chart polyline.plan { stroke:var(--accent); }
-  .chart polyline.start { stroke:var(--muted); stroke-dasharray:4 3; }
-  .chart .key { display:inline-block; width:14px; height:0; border-top:2px solid var(--accent); vertical-align:middle; margin-right:4px; }
-  .chart .key.start { border-top:2px dashed var(--muted); }
-  .chart p { margin:2px 0 0; }
-  ul { padding-left:18px; margin:6px 0 0; font-size:12px; color:var(--muted); }
-</style></head>
-<body><main>
-<h1>Planner results</h1>
-<p class="muted">Run <b>__RUN__</b> · __SEED__ · each map opens with the tacks drawn (red C city, blue S campus)</p>
-<div class="grid">
-__CARDS__
-</div>
-</main></body></html>
-"""

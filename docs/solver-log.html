@@ -57,8 +57,8 @@ drawn examples: <a href="mip-solving.html">How a MIP solver works</a>.</p>
 <table>
   <tr><th>Stage</th><th>Written by</th><th>What it tells you</th></tr>
   <tr><td>[1/5] Map</td><td><code>metrics.map_summary</code></td><td>What the planner sees: tiles, terrain, rivers, resources, cities, rules.</td></tr>
-  <tr><td>[2/5] Candidates</td><td><code>model.py</code></td><td>How many city sites, district and improvement options survive the filters. This mostly decides the model size.</td></tr>
-  <tr><td>[3/5] Building the model</td><td><code>model.py</code></td><td>Each variable, constraint and objective function and how much it adds.</td></tr>
+  <tr><td>[2/5] Candidates</td><td><code>model/preprocess.py</code></td><td>How many city sites, district and improvement options survive the filters. This mostly decides the model size.</td></tr>
+  <tr><td>[3/5] Building the model</td><td><code>model/formulation/</code></td><td>Each variable, constraint and objective function and how much it adds.</td></tr>
   <tr><td>[4/5] Solving</td><td>HiGHS itself</td><td>Presolve, then the branch-and-bound progress, then a report. The rest of this page is mostly about this stage.</td></tr>
   <tr><td>[5/5] Result</td><td><code>model.evaluate</code>, <code>metrics</code>, <code>validate</code></td><td>The plan's score, district/improvement statistics, spacing and a check against rules the model leaves out.</td></tr>
 </table>

@@ -2,7 +2,7 @@
 
 Recommends Civ VI (Gathering Storm) city, district and improvement placement from the
 map the player has revealed, and shows the plan in game as map tacks. The core is a
-mixed-integer programme (MIP, `model.py`, solved with HiGHS) that maximises weighted
+mixed-integer programme (MIP, `model/`, solved with HiGHS) that maximises weighted
 yields under the game's placement rules, read from the game's own database. Public repo:
 github.com/pierreosselin/civ6-planner (MIT), so commit nothing private.
 
@@ -13,8 +13,7 @@ the optimiser"). Commits and pushes only when he asks.
 
 ## The model in brief
 
-Full maths, kept in step with the code: `docs/model.html` (constraints numbered (1)–(11),
-timing (T1)–(T6)).
+Full maths, kept in step with the code: `docs/model.html` (constraints numbered (1)–(11)).
 
 - **Cities**: as many new ones as fit (`n_cities = "max"`), more than 3 tiles from any
   city (clique constraints, which made the full maps solvable), from the best
@@ -38,22 +37,13 @@ timing (T1)–(T6)).
 - **Not modelled on purpose**: other adjacency between *planned* districts ("+1 per 2
   districts", across cities), because general coupling constraints made HiGHS slow;
   tile ownership (checked after solving by `validate.py`); wonders (next topic).
-- **Optional, off by default** (both kept in the code, tested, documented):
-  - *Timing* (`[timing]`, `config/timing.toml` sets 6 periods over 120 turns): each city
-    and district gets the period it is ready in (`Plan.timing`, tacks "Campus C1 p3" or
-    "later"), under a settler schedule, a build rate and border delays; objective = the
-    static one minus what is lost by being late ((p − 1)/P of a value), so one period gives
-    the static plan. Solved in stages: where (static), when (placements fixed, < 1 s),
-    then `mode = "joint"` both together from that plan through highspy.
-    `model.yield_curve` gives yields per turn and cumulative per period (the timed score
-    is its area). Joint improves small maps (+4.8% on continents-revealed) but usually
-    keeps its start at 60 s on radius-6 and larger, and never moved a city.
-  - *Regional buildings* (`objective.regional_buildings`, e.g. `["BUILDING_FACTORY"]`:
-    +3 production to every city within 6 tiles of an Industrial Zone, across cities):
-    `r`/`on` variables, constraint `regional_reach`. On, continents, shuffle and
-    shuffle-radius18 end 7–30% from optimal at 60 s with worse plans, and every city is
-    reached anyway on the test maps (commenting out `regional_reach` alone restores the
-    times). A start from the plan without it would fix that.
+- **Optional, off by default**: *regional buildings* (`objective.regional_buildings`, e.g.
+  `["BUILDING_FACTORY"]`: +3 production to every city within 6 tiles of an Industrial
+  Zone, across cities): `r`/`on` variables, constraint `regional_reach`. On, continents,
+  shuffle and shuffle-radius18 end 7–30% from optimal at 60 s with worse plans, and every
+  city is reached anyway on the test maps (commenting out `regional_reach` alone restores
+  the times). A start from the plan without it would fix that (needs highspy back:
+  scipy can't pass a start).
 
 **Solve times** (static, 60 s limit, 2026-11-25): revealed maps < 6 s, radius-6 5–15 s,
 all optimal; continents-radius18, shuffle-radius18, continents and shuffle hit the
@@ -61,9 +51,12 @@ limit at gaps 0.05%, 1.3%, 0.07%, 0.33%.
 
 ## Status (2026-11-26)
 
-- Timing is paused by Pierre's decision: leave it off, don't develop it further for now.
+- Timing (when each city and district comes) was removed on 2026-11-26 (Pierre's
+  decision; to be redone later). The last version (periods, settler schedule, build rate,
+  border delays, where/when/joint stages through highspy, yield curves) is in git
+  history: commit a15a44f and before.
 - Regional buildings: off; open choice between a warm start and leaving it off.
-- In game, placing a 142-tack plan (timing on, 16 cities) seemed to freeze the game after
+- In game, placing a 142-tack plan (16 cities) seemed to freeze the game after
   Ctrl+Shift+T (probably Detailed Map Tacks recomputing for each tack). Not fixed; the
   proposed fix is fewer tacks in game (no improvement tacks, only what is due soon).
 - Next topic: wonders.
@@ -72,23 +65,28 @@ limit at gaps 0.05%, 1.3%, 0.07%, 0.33%.
   questions; tuning the objective's weights from a player's feedback by inverse
   optimisation), a simulator to measure plans in game terms.
 
-## Code map: `model.py`
+## Code map: `model/`
 
-- `Plan` (the result: `cities`, `districts` and `improvements` as (type, tile, city),
-  `info` with solver status, `timing`, `config`), `site_value`, `improvement_value`.
-- `evaluate(gmap, rules, plan)`: scores any plan in plain Python (the MIP's or the greedy
-  stub's), bonuses left out, returning (score, parts). Tests require MIP objective =
-  evaluate + bonuses.
-- `Instance` + `prepare()`: candidate sites, district tiles (`spots`), improvement
-  options (`ispots`) and the variables once created (`x` cities, `z` districts,
-  `y`, `w` improvements, `q`, `r`/`on`, timing `f`/`b`/`late`/`ready`).
-- One function per variable family, constraint and objective term, registered in the
-  `VARIABLES`, `CONSTRAINTS`, `OBJECTIVE` lists; `build()` runs them and logs what each
-  adds. Each timing step does nothing when `periods = 0`.
-- `optimise()`: `prepare`, then `_solve` (build, solve, read the plan back); with timing,
-  the where/when/joint stages.
-- `solver.py`: `Model` (`var`, `row`, `add_obj`, `fix`), solved through
-  `scipy.optimize.milp`, or through highspy when given a starting plan (scipy can't).
+- `plan.py`: `Plan` (the result: `cities`, `districts` and `improvements` as (type, tile,
+  city), `info` with solver status, `config`; `planned()`, `improved()`), `CITY_CENTER`.
+- `values.py`: `site_value`, `improvement_value`, `covered_value`, `regional_value`.
+- `existing.py`: what the player already has (cities and their districts, improvements).
+- `instance.py`: `Instance` (candidate sites, district tiles `spots`, improvement options
+  `ispots`, and the variables once created: `x` cities, `z` districts, `y`, `w`
+  improvements, `q`, `r`/`on`).
+- `preprocess.py`: `prepare()` builds the Instance (`city_sites`, `district_spots`,
+  `improvement_options`).
+- `formulation/`: one file per feature holding its variables, constraints and objective
+  terms (`cities`, `districts`, `district_rules`, `tiles`, `neighbour_bonus`,
+  `improvements`, `improvement_bonus`, `regional`); `__init__.py` registers them in the
+  `VARIABLES`, `CONSTRAINTS`, `OBJECTIVE` lists and `build()` runs them, logging what
+  each adds.
+- `solve.py`: `optimise()` (prepare, build, solve), `postprocess.py`: `read_plan`.
+- `evaluate.py`: `evaluate(gmap, rules, plan)` scores any plan in plain Python (the MIP's
+  or the greedy stub's), bonuses left out, returning (score, parts); `regional_cover`.
+  Tests require MIP objective = evaluate + bonuses.
+- `solver.py` (outside the package): `Model` (`var`, `row`, `add_obj`), solved through
+  `scipy.optimize.milp`; `capture.py` captures HiGHS's log.
 
 ## How the pieces fit
 
@@ -99,15 +97,21 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
 ```
 
 - `src/civ6_planner/`: `dump.py` (read `MAPDUMP|…` records from saves), `gamemap.py`
-  (hex grid), `rules.py` (rules from the game DB), `planner.py` (decisions: `mip` or
-  the old `greedy` stub), `model.py` (the optimiser: MIP formulation, `evaluate` to
-  score any plan), `config.py` (loads the settings), `solver.py` (small MIP modelling layer over
-  HiGHS via `scipy.optimize.milp`, captures the HiGHS log), `tacks.py` (writes the
-  plan), `dataset.py` (test maps and masks), `viewer.py` (HTML view), `results.py`
-  (results folders), `metrics.py` (plan statistics for the logs), `validate.py` (checks
-  a plan against rules the model leaves out), `paths.py` (the game's folders; override
-  with `CIV6_USER_DIR`), `cli.py`. Tests: `tests/test_planner.py` (one class per area:
-  geometry, rules, optimiser, regional, timing, improvements, validation, saves, config).
+  (hex grid), `rules/` (rules from the game DB: `tables.py` types and defaults,
+  `database.py`, `placement.py`, `adjacency.py`, the `Rules` class in `rules.py`),
+  `planner.py` (decisions: `mip` or the old stub in `greedy.py`; tacks and notes),
+  `model/` (the optimiser, see the code map above), `config.py` (loads the settings),
+  `solver.py` (small MIP modelling layer over HiGHS via `scipy.optimize.milp`),
+  `capture.py` (captures the HiGHS log), `tacks.py` (writes the plan), `dataset.py`
+  (test maps and masks), `viewer.py` + `viewer.html` (HTML view; the page is a template
+  file), `results.py` + `results_page.py` (results folders and their index page),
+  `metrics/` (plan and map statistics for the logs, and their text), `validate.py`
+  (checks a plan against rules the model leaves out), `paths.py` (the game's folders;
+  override with `CIV6_USER_DIR`), `cli/` (`__init__.py` the parser, `maps.py` which map
+  and settings, `commands.py` one function per command). Keep files short: a few
+  functions each, split by topic. Tests: `tests/test_<area>.py` (geometry, rules,
+  greedy, solver, optimiser, regional, improvements, validate, data, config), sharing
+  the small maps in `tests/helpers.py`.
 - `config/default.toml`: every model and solver parameter (cities and districts to
   plan, yield weights, bonuses, site radius, loss factor, HiGHS options). `--config FILE`
   on plan/watch/view/results overlays a file that sets only what it changes (e.g.
@@ -118,7 +122,7 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
 - `docs/model.html`: the model's maths (KaTeX), for Pierre's Live Server
   (`http://127.0.0.1:5500/docs/model.html`; when that isn't running,
   `python3 -m http.server 8765 --bind 127.0.0.1` from the repo root and
-  `http://127.0.0.1:8765/docs/model.html`). Keep it in step with `model.py`.
+  `http://127.0.0.1:8765/docs/model.html`). Keep it in step with `model/`.
   `docs/mip-solving.html` and `docs/solver-log.html` explain MIP solving and how to read
   HiGHS's log.
 - `mod/mapdump/`: the Lua mod; `civ6-planner install-mod` copies it to the
@@ -158,8 +162,8 @@ In Claude's shell, which isn't activated, prefix commands with `uv run` (or call
 `civ6-planner {plan,view,results,make-map,watch,clear,dump,install-mod} --help`.
 Tests: `uv run python -m unittest discover -s tests`. Dependencies live in
 `pyproject.toml` (add with `uv add <pkg>`, which updates `uv.lock`); currently
-SciPy (HiGHS via `scipy.optimize.milp`) and highspy (HiGHS directly, only for solves
-with a starting plan: the timed joint solve). Pierre expects to add more (other solvers,
+SciPy (HiGHS via `scipy.optimize.milp`; highspy was removed with timing, add it back
+for a starting plan). Pierre expects to add more (other solvers,
 libraries); keep each one justified.
 
 Skills in `.claude/skills/`: **view-map**, **plan-in-game**, **capture-test-map**,
@@ -167,10 +171,13 @@ Skills in `.claude/skills/`: **view-map**, **plan-in-game**, **capture-test-map*
 
 ## Changing the optimiser
 
-1. Edit `model.py`: one function per variable family, constraint and objective term,
-   registered in the `VARIABLES`, `CONSTRAINTS` and `OBJECTIVE` lists (commenting a line
-   out drops it; the log lists what was on). Add or adjust a test in `tests/test_planner.py` (the MIP's
-   objective must equal `evaluate()` plus the bonuses).
+1. Edit `model/formulation/`: one function per variable family, constraint and objective
+   term, in the file of its feature (a new feature gets its own file), registered in the
+   `VARIABLES`, `CONSTRAINTS` and `OBJECTIVE` lists of `formulation/__init__.py`
+   (commenting a line out drops it; the log lists what was on). New candidate sets go in
+   `preprocess.py`, new values in `values.py`, and `evaluate.py` must score the new term.
+   Add or adjust a test in `tests/test_optimiser.py` (or the feature's test file; the
+   MIP's objective must equal `evaluate()` plus the bonuses).
 2. `civ6-planner results -o results/<name>` and compare `summary.json`
    scores with the previous run and with `--planner greedy`; check each
    `optimisation.log` says `Optimal` and how long it took. Look at the maps (**view-map**).
@@ -178,7 +185,7 @@ Skills in `.claude/skills/`: **view-map**, **plan-in-game**, **capture-test-map*
 
 Pierre prefers a simple model that solves fast over a complete one that's slow: if a
 formulation makes HiGHS slow (seconds on the test maps, or a time limit), simplify the
-constraints or objective first and note what was left out in `model.py` and
+constraints or objective first and note what was left out in `model/formulation/` and
 `docs/model.html`.
 
 ## Map data model
@@ -291,7 +298,7 @@ core). Detailed Map Tacks only shows a tack's adjacency after `LuaEvents.DMT_Map
   classes (`GameMap`, `Rules`, `Config`, `Plan`, `Model`, `Instance`), never `object`;
   shared aliases: `Tile`, `XY` (gamemap.py), `Yields` (config.py), `Var` (solver.py),
   `AdjacencyRule` (rules.py). Check with
-  `uvx mypy --ignore-missing-imports --check-untyped-defs src/civ6_planner/{model,planner,config,solver,gamemap,rules,results,metrics,validate}.py`.
+  `uvx mypy --ignore-missing-imports --check-untyped-defs src/civ6_planner/{model,rules,metrics} src/civ6_planner/{planner,greedy,config,solver,capture,gamemap,results,results_page,validate}.py`.
 
 - The old `Mods/MapExtractorMod` (an earlier attempt) is still installed but disabled
   in game; leave it unless Pierre asks.

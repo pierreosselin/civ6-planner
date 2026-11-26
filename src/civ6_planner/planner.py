@@ -1,21 +1,14 @@
-"""Placement decisions.
-
-`plan(method="mip")` (default) asks the optimiser in model.py. `method="greedy"` is the
-first stub, kept to compare against:
-- City: a random tile where a city can be founded.
-- Campus: within the city's district range, on the tile with the best science
-  adjacency (mountains, rainforest, reefs, geothermal fissures, other districts,
-  the planned city included); ties are broken at random.
-"""
+"""Placement decisions: run a planner (`mip`, the optimiser in model/, or the `greedy`
+stub in greedy.py, kept to compare against), and turn its plan into named map tacks
+and notes."""
 from __future__ import annotations
 
 import random
-from typing import Callable
 from dataclasses import dataclass, field
 
-from . import config, model
+from . import config, greedy, model
 from .config import Config
-from .gamemap import XY, GameMap, Tile
+from .gamemap import XY, GameMap
 from .model import Plan
 from .rules import Rules
 
@@ -32,36 +25,6 @@ class Tack:
     yields: dict[str, int] = field(default_factory=dict)  # what the district would give, e.g. adjacency
 
 
-def choose_city(gmap: GameMap, rules: Rules, rng: random.Random) -> Tile | None:
-    candidates = [t for t in gmap if rules.can_found_city(gmap, t)]
-    return rng.choice(candidates) if candidates else None
-
-
-def choose_campus(gmap: GameMap, rules: Rules, city: Tile, rng: random.Random) -> tuple[Tile | None, int]:
-    """The Campus tile and its science adjacency."""
-    candidates = [t for t in gmap.within(city, rules.district_range) if rules.can_place_district(gmap, t)
-                  and (t["x"], t["y"]) != (city["x"], city["y"])]
-    if not candidates:
-        return None, 0
-    planned = {(city["x"], city["y"]): "DISTRICT_CITY_CENTER"}
-    science = {t["i"]: rules.adjacency(gmap, t, "DISTRICT_CAMPUS", planned).get("YIELD_SCIENCE", 0)
-               for t in candidates}
-    best = max(science.values())
-    return rng.choice([t for t in candidates if science[t["i"]] == best]), best
-
-
-def plan_greedy(gmap: GameMap, rules: Rules, rng: random.Random) -> Plan:
-    """The first stub: a random city, then the best Campus tile for it."""
-    city = choose_city(gmap, rules, rng)
-    if city is None:
-        return model.Plan(info={"status": "no city site"})
-    p = model.Plan(cities=[(city["x"], city["y"])], info={"status": "greedy"})
-    campus, _ = choose_campus(gmap, rules, city, rng)
-    if campus is not None:
-        p.districts.append(("DISTRICT_CAMPUS", (campus["x"], campus["y"]), (city["x"], city["y"])))
-    return p
-
-
 METHODS = ("mip", "greedy")
 
 
@@ -74,7 +37,7 @@ def solve(gmap: GameMap, rules: Rules, rng: random.Random | None = None, method:
     cfg = cfg or config.default()
     if method == "mip":
         return model.optimise(gmap, rules, cfg, progress=progress, record=record, live=live)
-    p = plan_greedy(gmap, rules, rng or random.Random())
+    p = greedy.plan_greedy(gmap, rules, rng or random.Random())
     p.config = cfg   # the stub ignores the settings, but its plan is scored with them
     return p
 
@@ -92,22 +55,20 @@ def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
     if not p.cities and not p.districts and not p.improvements:
         return [f"{method}: nothing to place: no city site and no district spot ({p.info.get('status')})"]
     label = city_labels(gmap, p)
-    when = period_labels(p)
     score, parts = model.evaluate(gmap, rules, p)
     notes.append(f"{method}: score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
                  f" + improvements {parts['improvements']:.1f} + regional {parts['regional']:.1f}"
-                 f" - covered tiles {parts['lost']:.1f}"
-                 + (f" - late {parts['late']:.1f}" if "late" in parts else ""))
+                 f" - covered tiles {parts['lost']:.1f}")
     if method == "mip":
         i = p.info
         notes.append(f"HiGHS {i['status']} in {i['seconds']}s: {i['variables']} variables, {i['rows']} rows, "
                      f"{i['city_candidates']} city sites considered")
     for xy in p.cities:
-        notes.append(f"city {label[xy]}{when(xy)} at {xy}: {gmap.tiles[xy]['terrain']}, "
+        notes.append(f"city {label[xy]} at {xy}: {gmap.tiles[xy]['terrain']}, "
                      f"site value {model.site_value(gmap, gmap.tiles[xy], p.config):.1f}")
     for d, xy, city in p.districts:
         adj = ", ".join(f"+{v} {y[6:].lower()}" for y, v in _district_yields(gmap, rules, p, d, xy).items())
-        notes.append(f"{district_name(d).lower()} of {label[city]}{when(xy)} at {xy}: {gmap.tiles[xy]['terrain']}, "
+        notes.append(f"{district_name(d).lower()} of {label[city]} at {xy}: {gmap.tiles[xy]['terrain']}, "
                      f"{adj or 'no adjacency'}")
     for imp, xy, city in p.improvements:
         gain = ", ".join(f"+{v} {y[6:].lower()}" for y, v in rules.improvements[imp].yields.items())
@@ -136,29 +97,16 @@ def district_name(district: str) -> str:
 
 
 def _district_yields(gmap: GameMap, rules: Rules, p: Plan, district: str, xy: XY) -> dict[str, int]:
-    planned = {c: model.CITY_CENTER for c in p.cities}
-    planned.update({t: d for d, t, _ in p.districts})
-    improved = {t: i for i, t, _ in p.improvements}
-    return rules.adjacency(gmap, gmap.tiles[xy], district, planned, improved)
-
-
-def period_labels(p: Plan) -> Callable[[XY], str]:
-    """For timed plans, a suffix per city/district tile: " p2" (built in period 2) or
-    " later" (after the horizon); "" for static plans."""
-    if not (p.config.timing.periods and (p.timing or p.info.get("stages"))):
-        return lambda xy: ""
-    return lambda xy: f" p{p.timing[xy]}" if xy in p.timing else " later"
+    return rules.adjacency(gmap, gmap.tiles[xy], district, p.planned(), p.improved())
 
 
 def to_tacks(gmap: GameMap, rules: Rules, p: Plan) -> list[Tack]:
     """City tacks named "City C1", district tacks "Campus C1" (or "Campus Rome" for one
-    of the player's cities), so it's clear which city a district belongs to. Timed
-    plans add the period: "Campus C1 p3", or "later" after the horizon."""
+    of the player's cities), so it's clear which city a district belongs to."""
     label = city_labels(gmap, p)
-    when = period_labels(p)
-    tacks = [Tack(x, y, CITY_ICON, f"City {label[(x, y)]}{when((x, y))}") for x, y in p.cities]
+    tacks = [Tack(x, y, CITY_ICON, f"City {label[(x, y)]}") for x, y in p.cities]
     for d, (x, y), city in p.districts:
-        tacks.append(Tack(x, y, "ICON_" + d, f"{district_name(d)} {label[city]}{when((x, y))}",
+        tacks.append(Tack(x, y, "ICON_" + d, f"{district_name(d)} {label[city]}",
                           _district_yields(gmap, rules, p, d, (x, y))))
     for i, (x, y), city in p.improvements:
         tacks.append(Tack(x, y, "ICON_" + i, f"{improvement_name(i)} {label[city]}",

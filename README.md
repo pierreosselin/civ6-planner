@@ -121,15 +121,16 @@ New test maps: in a throwaway game press Ctrl+Shift+F, save, then
 
 | Path | What |
 |---|---|
-| `src/civ6_planner/model.py` | the optimiser: the MIP, one function per variable, constraint and objective term |
+| `src/civ6_planner/model/` | the optimiser: `preprocess.py` (candidates), `formulation/` (one file per feature: its variables, constraints and objective terms), `solve.py`, `postprocess.py`, `evaluate.py` (scores any plan) |
 | `src/civ6_planner/solver.py` | small modelling layer over HiGHS (`scipy.optimize.milp`) |
-| `src/civ6_planner/rules.py` | placement and adjacency rules from the game database |
+| `src/civ6_planner/rules/` | placement and adjacency rules from the game database |
 | `src/civ6_planner/gamemap.py` | the map: tiles, hex distance (odd-r, east–west wrap), rivers |
 | `src/civ6_planner/config.py` | settings: `config/default.toml`, case and `--config` overrides |
-| `src/civ6_planner/planner.py` | runs a planner and turns its plan into named tacks |
-| `src/civ6_planner/results.py`, `metrics.py` | results folders, logs and plan statistics |
+| `src/civ6_planner/planner.py`, `greedy.py` | runs a planner and turns its plan into named tacks; the greedy stub |
+| `src/civ6_planner/results.py`, `metrics/` | results folders, logs and plan statistics |
 | `src/civ6_planner/dump.py`, `tacks.py` | reading map dumps out of saves; writing the plan for the mod |
 | `src/civ6_planner/viewer.py`, `dataset.py` | the HTML map page; test cases and masks |
+| `src/civ6_planner/cli/` | the command line |
 | `mod/mapdump/` | the Civ VI mod (Lua) |
 | `docs/model.html` | the model's maths |
 | `CLAUDE.md`, `.claude/skills/` | working notes for [Claude Code](https://claude.com/claude-code), with which this is developed |
@@ -151,8 +152,7 @@ Found while getting data in and out of the game; worth knowing before changing t
 
 ## Not modelled yet
 
-Detailed timing (an optional coarse version, `config/timing.toml`, says in which 20-turn
-period each city and district comes), most adjacency between planned
+Timing (when each city and district comes), most adjacency between planned
 districts of different cities, technology- and civic-gated rules, tile ownership,
 other districts (Entertainment Complex, Government Plaza, Canal, ...), wonders. See
 the last section of [`docs/model.html`](docs/model.html).
