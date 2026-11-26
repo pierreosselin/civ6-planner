@@ -3,5 +3,5 @@ __pycache__/
 .venv/
 /map.json
 *.csv
-view*.html
+/view*.html
 results/

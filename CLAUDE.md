@@ -304,4 +304,4 @@ core). Detailed Map Tacks only shows a tack's adjacency after `LuaEvents.DMT_Map
   in game; leave it unless Pierre asks.
 - To show the viewer inside the Claude desktop app, use the preview server in
   `.claude/launch.json` (the browser pane can't open `file://` pages); see **view-map**.
-- Generated pages `view*.html`, `/map.json` (repo root only), `*.csv` are git-ignored.
+- Generated pages `/view*.html` and `/map.json` (repo root only), `*.csv` are git-ignored.
