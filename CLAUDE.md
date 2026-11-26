@@ -1,51 +1,94 @@
 # civ6-planner
 
 Recommends Civ VI (Gathering Storm) city, district and improvement placement from the
-map the player has revealed, and shows the plan in game as map tacks. The goal is an
-optimiser that maximises yields under the game's placement rules. The MIP
-(`model.py`) places as many cities as fit (`n_cities = "max"`), each with a Campus,
-Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, (on coast) Harbor,
-Aqueduct (next to the centre and fresh water) and Dam (floodplains with a river on 2+
-edges, one per river), and gives the player's existing cities the ones they lack.
-At most 3 specialty districts per city (`problem.max_specialty_districts`; the game's
-population limit, RequiresPopulation; Aqueduct and Dam don't count), so the weights
-decide which ones each city gets. Bonuses between a city's own planned districts (Industrial Zone next to Aqueduct/Dam,
-Commercial Hub next to Harbor) are modelled with `y` variables. Improvements (Farm, Mine,
-Quarry, Plantation, Camp, Pasture, Fishing Boats, Lumber Mill; placement from the DB):
-up to 5 per city, each worth its gain plus the tile's own yields (an improved tile is
-worked), only each city's 6 best options kept (`problem.improvement_candidates`; all of
-them made the full maps hit the time limit); Industrial Zone bonuses from planned
-quarries/mines/lumber mills via `q` variables. Each run's log ends
-with metrics (`metrics.py`: districts per city, share of cities with each district
-type, mean adjacency per type). Tacks are named per city
-("City C1", "Campus C1", "Campus Rome");
-Entertainment Complex left out on purpose. Objective: site yields + district
-adjacency − covered tiles + improved tiles; food, production and science weighted 2 for now
-(food so cities grow enough for their districts). With 400
-city candidates the six original cases solve to optimal in ~67 s in total (full maps
-11–32 s; city spacing written as clique constraints, which made that possible). With all
-sites (the full maps' configs) and on the radius-18 maps they reach the 60 s limit: gaps
-0.016% (continents), 1.24% (shuffle-radius18), 16.5% (shuffle: one rounding plan at 11.5 s,
-then nothing; needs more time or a starting plan). Optional timing (`[timing]`, off by default; `config/timing.toml` sets 6 periods over
-120 turns): each city and district gets the period it is ready in (`Plan.timing`, tacks
-"Campus C1 p3" or "later"), under a settler schedule, a build rate and border delays; the
-objective is the static one minus what is lost by being late ((p - 1)/P of a value), so
-one period gives the static plan. Solved in stages: where (static), when (placements
-fixed, < 1 s), then `mode = "joint"` (default) both together starting from that plan
-(`highspy`, which takes a start; scipy can't). `model.yield_curve` gives a timed plan's
-yields per turn and cumulative per period (the timed score is its area); the metrics print
-it, with the joint stage's start, and the results page draws it. Joint improves small maps (4.8% on
-continents-revealed) but often keeps its start at 60 s on radius-6 and larger.
-Regional buildings (`objective.regional_buildings`, off by default; e.g. the Factory: +3
-production to each city within 6 tiles of an Industrial Zone, across cities): `r`/`on`
-variables and `regional_reach`; on, the big shuffle maps and continents end 7–30% from
-optimal at 60 s (worse plans than without), and every city is reached anyway on the test maps.
-Kept simple on purpose: other adjacency
-between *planned* districts ("+1 per 2 districts", across cities) isn't modelled
-yet, because general coupling constraints made HiGHS slow.
+map the player has revealed, and shows the plan in game as map tacks. The core is a
+mixed-integer programme (MIP, `model.py`, solved with HiGHS) that maximises weighted
+yields under the game's placement rules, read from the game's own database. Public repo:
+github.com/pierreosselin/civ6-planner (MIT), so commit nothing private.
 
 Owner: Pierre. Plays on the **native Linux (Aspyr) port under Steam**, Wayland session.
 Prefers developing without the game open, using the test maps and the HTML viewer.
+Prefers a simple model that solves fast over a complete one that's slow (see "Changing
+the optimiser"). Commits and pushes only when he asks.
+
+## The model in brief
+
+Full maths, kept in step with the code: `docs/model.html` (constraints numbered (1)–(11),
+timing (T1)–(T6)).
+
+- **Cities**: as many new ones as fit (`n_cities = "max"`), more than 3 tiles from any
+  city (clique constraints, which made the full maps solvable), from the best
+  `max_city_candidates` sites by site value (400; the full maps' configs use all sites).
+- **Districts** per city (new, and the player's existing cities get the ones they lack):
+  Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor (coast),
+  Aqueduct (next to the centre and fresh water), Dam (floodplains with a river on 2+
+  edges, one per river). At most 3 specialty districts per city
+  (`max_specialty_districts`, the game's population limit; Aqueduct and Dam don't count),
+  so the weights decide which ones. Entertainment Complex left out on purpose.
+- **Improvements** (Farm, Mine, Quarry, Plantation, Camp, Pasture, Fishing Boats, Lumber
+  Mill): up to 5 per city, each worth its gain plus the tile's own yields (an improved
+  tile is worked); only each city's 6 best options are variables (all of them made the
+  full maps hit the time limit).
+- **Objective**: site yields + district adjacency − covered tiles + improved tiles +
+  bonuses between a city's own planned districts (`y`: Industrial Zone next to
+  Aqueduct/Dam, Commercial Hub next to Harbor) and between its district and its planned
+  improvements (`q`: Industrial Zone next to quarries/mines/lumber mills), plus a
+  placement bonus per city (100) and district (10). Food, production and science weighted
+  2, the rest 0.5 (placeholders).
+- **Not modelled on purpose**: other adjacency between *planned* districts ("+1 per 2
+  districts", across cities), because general coupling constraints made HiGHS slow;
+  tile ownership (checked after solving by `validate.py`); wonders (next topic).
+- **Optional, off by default** (both kept in the code, tested, documented):
+  - *Timing* (`[timing]`, `config/timing.toml` sets 6 periods over 120 turns): each city
+    and district gets the period it is ready in (`Plan.timing`, tacks "Campus C1 p3" or
+    "later"), under a settler schedule, a build rate and border delays; objective = the
+    static one minus what is lost by being late ((p − 1)/P of a value), so one period gives
+    the static plan. Solved in stages: where (static), when (placements fixed, < 1 s),
+    then `mode = "joint"` both together from that plan through highspy.
+    `model.yield_curve` gives yields per turn and cumulative per period (the timed score
+    is its area). Joint improves small maps (+4.8% on continents-revealed) but usually
+    keeps its start at 60 s on radius-6 and larger, and never moved a city.
+  - *Regional buildings* (`objective.regional_buildings`, e.g. `["BUILDING_FACTORY"]`:
+    +3 production to every city within 6 tiles of an Industrial Zone, across cities):
+    `r`/`on` variables, constraint `regional_reach`. On, continents, shuffle and
+    shuffle-radius18 end 7–30% from optimal at 60 s with worse plans, and every city is
+    reached anyway on the test maps (commenting out `regional_reach` alone restores the
+    times). A start from the plan without it would fix that.
+
+**Solve times** (static, 60 s limit, 2026-11-25): revealed maps < 6 s, radius-6 5–15 s,
+all optimal; continents-radius18, shuffle-radius18, continents and shuffle hit the
+limit at gaps 0.05%, 1.3%, 0.07%, 0.33%.
+
+## Status (2026-11-26)
+
+- Timing is paused by Pierre's decision: leave it off, don't develop it further for now.
+- Regional buildings: off; open choice between a warm start and leaving it off.
+- In game, placing a 142-tack plan (timing on, 16 cities) seemed to freeze the game after
+  Ctrl+Shift+T (probably Detailed Map Tacks recomputing for each tack). Not fixed; the
+  proposed fix is fewer tacks in game (no improvement tacks, only what is due soon).
+- Next topic: wonders.
+- Ideas discussed, not started: an expansion rule (new cities within 6–8 tiles of an
+  earlier one), an LLM around the optimiser (explaining plans by re-solving what-if
+  questions; tuning the objective's weights from a player's feedback by inverse
+  optimisation), a simulator to measure plans in game terms.
+
+## Code map: `model.py`
+
+- `Plan` (the result: `cities`, `districts` and `improvements` as (type, tile, city),
+  `info` with solver status, `timing`, `config`), `site_value`, `improvement_value`.
+- `evaluate(gmap, rules, plan)`: scores any plan in plain Python (the MIP's or the greedy
+  stub's), bonuses left out, returning (score, parts). Tests require MIP objective =
+  evaluate + bonuses.
+- `Instance` + `prepare()`: candidate sites, district tiles (`spots`), improvement
+  options (`ispots`) and the variables once created (`x` cities, `z` districts,
+  `y`, `w` improvements, `q`, `r`/`on`, timing `f`/`b`/`late`/`ready`).
+- One function per variable family, constraint and objective term, registered in the
+  `VARIABLES`, `CONSTRAINTS`, `OBJECTIVE` lists; `build()` runs them and logs what each
+  adds. Each timing step does nothing when `periods = 0`.
+- `optimise()`: `prepare`, then `_solve` (build, solve, read the plan back); with timing,
+  the where/when/joint stages.
+- `solver.py`: `Model` (`var`, `row`, `add_obj`, `fix`), solved through
+  `scipy.optimize.milp`, or through highspy when given a starting plan (scipy can't).
 
 ## How the pieces fit
 
@@ -61,7 +104,10 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
   score any plan), `config.py` (loads the settings), `solver.py` (small MIP modelling layer over
   HiGHS via `scipy.optimize.milp`, captures the HiGHS log), `tacks.py` (writes the
   plan), `dataset.py` (test maps and masks), `viewer.py` (HTML view), `results.py`
-  (results folders), `metrics.py` (plan statistics for the logs), `cli.py`.
+  (results folders), `metrics.py` (plan statistics for the logs), `validate.py` (checks
+  a plan against rules the model leaves out), `paths.py` (the game's folders; override
+  with `CIV6_USER_DIR`), `cli.py`. Tests: `tests/test_planner.py` (one class per area:
+  geometry, rules, optimiser, regional, timing, improvements, validation, saves, config).
 - `config/default.toml`: every model and solver parameter (cities and districts to
   plan, yield weights, bonuses, site radius, loss factor, HiGHS options). `--config FILE`
   on plan/watch/view/results overlays a file that sets only what it changes (e.g.
@@ -70,7 +116,11 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
   except in `[solver]`, which passes any `scipy.optimize.milp` option. New parameters go in
   default.toml and `config.Config`, not as constants in code.
 - `docs/model.html`: the model's maths (KaTeX), for Pierre's Live Server
-  (`http://127.0.0.1:5500/docs/model.html`). Keep it in step with `model.py`.
+  (`http://127.0.0.1:5500/docs/model.html`; when that isn't running,
+  `python3 -m http.server 8765 --bind 127.0.0.1` from the repo root and
+  `http://127.0.0.1:8765/docs/model.html`). Keep it in step with `model.py`.
+  `docs/mip-solving.html` and `docs/solver-log.html` explain MIP solving and how to read
+  HiGHS's log.
 - `mod/mapdump/`: the Lua mod; `civ6-planner install-mod` copies it to the
   game (keeps the current plan file).
 - `data/<case>/`: one test case per folder, `map.json` + `config.toml` (settings for
@@ -81,7 +131,7 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
   (turn 2, 12–13 AI/city-state cities already founded); every tile has `revealed`
   and `resource_visible` flags from capture time. `*-revealed` (what the player had
   revealed) and `*-radius6` / `*-radius18` (radius 6 / 18 around the player's start, visible
-  resources only; radius 18 takes ~55–60 s, shuffle's hits the limit at a 1.2% gap) are masked maps cut from them with `make-map`; their `scenario.source` names
+  resources only; both radius-18 maps hit the 60 s limit) are masked maps cut from them with `make-map`; their `scenario.source` names
   the full map's case.
 - `results [-o DIR]` plans every test case in `data/` and writes `results/<date-time>/`
   (git-ignored): `index.html` (tacks and notes per case, links to each map),
