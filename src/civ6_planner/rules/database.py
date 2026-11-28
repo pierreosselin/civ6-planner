@@ -7,7 +7,13 @@ import sqlite3
 from typing import Any
 
 from .. import paths
-from .tables import PLACEMENT_FLAGS, AdjacencyRule, ImprovementRule, RegionalBuilding
+from .tables import (
+    PLACEMENT_FLAGS,
+    AdjacencyRule,
+    ImprovementRule,
+    RegionalBuilding,
+    WonderRule,
+)
 
 
 def read_rules(db_path: str = paths.GAMEPLAY_DB) -> dict[str, Any]:
@@ -29,6 +35,10 @@ def read_rules(db_path: str = paths.GAMEPLAY_DB) -> dict[str, Any]:
             valid_terrains=read_sets(db, "District_ValidTerrains", "TerrainType"),
             improvements=read_improvements(db),
             regional=read_regional(db),
+            entertainment={d: int(n) for d, n in db.execute(
+                "SELECT DistrictType, Entertainment FROM Districts WHERE Entertainment > 0")},
+            removable_features=tuple(f for (f,) in db.execute("SELECT FeatureType FROM Features WHERE Removable = 1")),
+            wonders=read_wonders(db),
         )
     finally:
         db.close()
@@ -43,6 +53,32 @@ def read_regional(db: sqlite3.Connection) -> dict[str, RegionalBuilding]:
         ys = dict(db.execute("SELECT YieldType, YieldChange FROM Building_YieldChanges WHERE BuildingType = ?", (b,)))
         if ys:
             out[b] = RegionalBuilding(d, int(r), ys)
+    return out
+
+
+# Buildings columns that restrict where a wonder goes, not checked yet: a wonder setting
+# any of them is never planned (WonderRule.requires).
+WONDER_REQUIREMENTS = ("RequiresRiver", "RequiresAdjacentRiver", "Coast", "MustBeLake", "MustNotBeLake",
+                       "MustBeAdjacentLand", "AdjacentToMountain", "AdjacentCapital", "AdjacentResource",
+                       "AdjacentImprovement", "CityAdjacentTerrain")
+
+
+def read_wonders(db: sqlite3.Connection) -> dict[str, WonderRule]:
+    """Non-unique world wonders: where they may go and what they give."""
+    out = {}
+    for b, adjacent, ent, rng, *flags in db.execute(
+            f"SELECT BuildingType, AdjacentDistrict, Entertainment, RegionalRange, {', '.join(WONDER_REQUIREMENTS)} "
+            "FROM Buildings WHERE IsWonder = 1 AND TraitType IS NULL"):
+        requires = [name for name, v in zip(WONDER_REQUIREMENTS, flags) if v]
+        if db.execute("SELECT 1 FROM Building_RequiredFeatures WHERE BuildingType = ?", (b,)).fetchone():
+            requires.append("Building_RequiredFeatures")
+        out[b] = WonderRule(
+            terrains={t for (t,) in db.execute("SELECT TerrainType FROM Building_ValidTerrains WHERE BuildingType = ?", (b,))},
+            features={f for (f,) in db.execute("SELECT FeatureType FROM Building_ValidFeatures WHERE BuildingType = ?", (b,))},
+            adjacent_district=adjacent,
+            yields={y: n for y, n in db.execute(
+                "SELECT YieldType, YieldChange FROM Building_YieldChanges WHERE BuildingType = ?", (b,)) if n},
+            entertainment=int(ent or 0), range=int(rng or 0), requires=tuple(requires))
     return out
 
 

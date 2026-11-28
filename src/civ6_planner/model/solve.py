@@ -18,10 +18,11 @@ from .preprocess import prepare
 def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: int | str | None = None,
              districts: tuple[str, ...] | None = None, improvements: tuple[str, ...] | None = None,
              progress: Progress | None = None, record: Progress | None = None,
-             live: bool | None = None) -> Plan:
+             live: bool | None = None, wonders: tuple[str, ...] | None = None) -> Plan:
     """Best plan for n_cities new cities with their districts and improvements, plus the
     districts and improvements the player's existing cities can still get.
-    cfg: a Config (None: config/default.toml); n_cities, districts, improvements override it.
+    cfg: a Config (None: config/default.toml); n_cities, districts, improvements, wonders
+    override it.
     progress: called with each line of the run (stages, model size); record: with HiGHS's
     log once solved; live: stream HiGHS's log to the terminal (default: with progress)."""
     cfg = cfg or config.default()
@@ -31,7 +32,8 @@ def optimise(gmap: GameMap, rules: Rules, cfg: Config | None = None, n_cities: i
     say("[2/5] Candidates")
     inst = prepare(gmap, rules, cfg, cfg.n_cities if n_cities is None else n_cities,
                    cfg.districts if districts is None else districts, cfg.max_city_candidates,
-                   cfg.improvements if improvements is None else improvements)
+                   cfg.improvements if improvements is None else improvements,
+                   cfg.wonders if wonders is None else wonders)
     _report_candidates(inst, say, time.perf_counter() - start)
     return solve_instance(inst, progress, record, live)
 
@@ -43,6 +45,11 @@ def _report_candidates(inst: Instance, say: Progress, seconds: float) -> None:
     say(f"  {sum(len(v) for v in inst.spots.values()):,} district options over {len(inst.districts)} types, "
         f"{sum(len(v) for v in inst.ispots.values()):,} improvement options "
         f"({cfg.improvement_candidates} best per city)   {seconds:.1f} s")
+    if inst.wonders:
+        tiles = {b: sum(1 for w, _ in inst.wspots if w == b) for b in inst.wonders}
+        say("  wonder tiles: " + ", ".join(f"{b.removeprefix('BUILDING_').replace('_', ' ').title()} {n:,}"
+                                           for b, n in tiles.items())
+            + f" (the {cfg.wonder_candidates} with the most city sites in range)")
 
 
 def solve_instance(inst: Instance, progress: Progress | None = None, record: Progress | None = None,

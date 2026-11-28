@@ -52,12 +52,13 @@ def plan(gmap: GameMap, rules: Rules, rng: random.Random | None = None, method: 
 def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
     """Human-readable notes on a plan: its score, the solver's run, each placement."""
     notes = []
-    if not p.cities and not p.districts and not p.improvements:
+    if not p.cities and not p.districts and not p.improvements and not p.wonders:
         return [f"{method}: nothing to place: no city site and no district spot ({p.info.get('status')})"]
     label = city_labels(gmap, p)
     score, parts = model.evaluate(gmap, rules, p)
     notes.append(f"{method}: score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
                  f" + improvements {parts['improvements']:.1f} + regional {parts['regional']:.1f}"
+                 f" + wonders {parts['wonders']:.1f} + amenities {parts['amenities']:.1f}"
                  f" - covered tiles {parts['lost']:.1f}")
     if method == "mip":
         i = p.info
@@ -70,6 +71,14 @@ def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
         adj = ", ".join(f"+{v} {y[6:].lower()}" for y, v in _district_yields(gmap, rules, p, d, xy).items())
         notes.append(f"{district_name(d).lower()} of {label[city]} at {xy}: {gmap.tiles[xy]['terrain']}, "
                      f"{adj or 'no adjacency'}")
+    for b, xy, city in p.wonders:
+        w = rules.wonders[b]
+        reach = sum(1 for c in label if gmap.distance(c, xy) <= w.range) if w.range else 0
+        gives = [f"+{v} {y[6:].lower()}" for y, v in w.yields.items()]
+        if w.entertainment and w.range:
+            gives.append(f"+{w.entertainment} amenities to {reach} cities within {w.range}")
+        notes.append(f"{wonder_name(b).lower()} of {label[city]} at {xy}: {gmap.tiles[xy]['terrain']}, "
+                     f"{', '.join(gives) or 'no yields'}")
     for imp, xy, city in p.improvements:
         gain = ", ".join(f"+{v} {y[6:].lower()}" for y, v in rules.improvements[imp].yields.items())
         notes.append(f"{improvement_name(imp).lower()} of {label[city]} at {xy}: {gmap.tiles[xy]['terrain']}"
@@ -81,6 +90,11 @@ def explain(gmap: GameMap, rules: Rules, p: Plan, method: str) -> list[str]:
 def improvement_name(improvement: str) -> str:
     """IMPROVEMENT_LUMBER_MILL -> Lumber Mill."""
     return improvement.removeprefix("IMPROVEMENT_").replace("_", " ").title()
+
+
+def wonder_name(wonder: str) -> str:
+    """BUILDING_COLOSSEUM -> Colosseum."""
+    return wonder.removeprefix("BUILDING_").replace("_", " ").title()
 
 
 def city_labels(gmap: GameMap, p: Plan) -> dict[XY, str]:
@@ -102,12 +116,15 @@ def _district_yields(gmap: GameMap, rules: Rules, p: Plan, district: str, xy: XY
 
 def to_tacks(gmap: GameMap, rules: Rules, p: Plan) -> list[Tack]:
     """City tacks named "City C1", district tacks "Campus C1" (or "Campus Rome" for one
-    of the player's cities), so it's clear which city a district belongs to."""
+    of the player's cities), so it's clear which city a district belongs to; wonders
+    ("Colosseum C1") and improvements likewise."""
     label = city_labels(gmap, p)
     tacks = [Tack(x, y, CITY_ICON, f"City {label[(x, y)]}") for x, y in p.cities]
     for d, (x, y), city in p.districts:
         tacks.append(Tack(x, y, "ICON_" + d, f"{district_name(d)} {label[city]}",
                           _district_yields(gmap, rules, p, d, (x, y))))
+    for b, (x, y), city in p.wonders:
+        tacks.append(Tack(x, y, "ICON_" + b, f"{wonder_name(b)} {label[city]}", dict(rules.wonders[b].yields)))
     for i, (x, y), city in p.improvements:
         tacks.append(Tack(x, y, "ICON_" + i, f"{improvement_name(i)} {label[city]}",
                           dict(rules.improvements[i].yields)))

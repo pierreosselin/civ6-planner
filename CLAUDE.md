@@ -13,7 +13,7 @@ the optimiser"). Commits and pushes only when he asks.
 
 ## The model in brief
 
-Full maths, kept in step with the code: `docs/model.html` (constraints numbered (1)–(11)).
+Full maths, kept in step with the code: `docs/model.html` (constraints numbered (1)–(14)).
 
 - **Cities**: as many new ones as fit (`n_cities = "max"`), more than 3 tiles from any
   city (clique constraints, which made the full maps solvable), from the best
@@ -21,9 +21,20 @@ Full maths, kept in step with the code: `docs/model.html` (constraints numbered 
 - **Districts** per city (new, and the player's existing cities get the ones they lack):
   Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor (coast),
   Aqueduct (next to the centre and fresh water), Dam (floodplains with a river on 2+
-  edges, one per river). At most 3 specialty districts per city
+  edges, one per river), Entertainment Complex. At most 3 specialty districts per city
   (`max_specialty_districts`, the game's population limit; Aqueduct and Dam don't count),
-  so the weights decide which ones. Entertainment Complex left out on purpose.
+  so the weights decide which ones.
+- **Amenities and the Colosseum** (planned jointly): the Colosseum (`problem.wonders`, a
+  world wonder: `k[b,t]`, one per world) goes on flat land next to one city's
+  Entertainment Complex and gives +2 amenities to every city within 6 tiles. `a[c]`
+  counts a city's amenities from districts (Entertainment Complex +1, Dam +1) and wonders,
+  up to `amenities_needed` (2), each worth `amenity_value` (4, placeholder). The
+  Entertainment Complex gets no district bonus (`no_bonus_districts`), so it's built only
+  where it pays: on the test maps a single one, the Colosseum's. Only the
+  `wonder_candidates` (1) tile(s) with the most city sites within 6 are variables: with
+  all 481 on continents the root LP didn't finish in 60 s (no plan at all); with 10 the
+  time-limited maps ended 24–29% from optimal without a Colosseum; with 1 they end where
+  they did before (small maps: 10 gains at most 8 points).
 - **Improvements** (Farm, Mine, Quarry, Plantation, Camp, Pasture, Fishing Boats, Lumber
   Mill): up to 5 per city, each worth its gain plus the tile's own yields (an improved
   tile is worked); only each city's 6 best options are variables (all of them made the
@@ -34,9 +45,11 @@ Full maths, kept in step with the code: `docs/model.html` (constraints numbered 
   improvements (`q`: Industrial Zone next to quarries/mines/lumber mills), plus a
   placement bonus per city (100) and district (10). Food, production and science weighted
   2, the rest 0.5 (placeholders).
-- **Not modelled on purpose**: other adjacency between *planned* districts ("+1 per 2
-  districts", across cities), because general coupling constraints made HiGHS slow;
-  tile ownership (checked after solving by `validate.py`); wonders (next topic).
+- **Not modelled on purpose**: other adjacency between *planned* districts and wonders
+  ("+1 per 2 districts", Theater +2 per wonder, across cities), because general coupling
+  constraints made HiGHS slow; tile ownership (checked after solving by `validate.py`);
+  wonders other than the Colosseum (their placement rules aren't all read: river, coast,
+  mountain; `WonderRule.requires`); amenities from luxuries and buildings.
 - **Optional, off by default**: *regional buildings* (`objective.regional_buildings`, e.g.
   `["BUILDING_FACTORY"]`: +3 production to every city within 6 tiles of an Industrial
   Zone, across cities): `r`/`on` variables, constraint `regional_reach`. On, continents,
@@ -45,9 +58,11 @@ Full maths, kept in step with the code: `docs/model.html` (constraints numbered 
   the times). A start from the plan without it would fix that (needs highspy back:
   scipy can't pass a start).
 
-**Solve times** (static, 60 s limit, 2026-11-25): revealed maps < 6 s, radius-6 5–15 s,
-all optimal; continents-radius18, shuffle-radius18, continents and shuffle hit the
-limit at gaps 0.05%, 1.3%, 0.07%, 0.33%.
+**Solve times** (60 s limit, 2026-11-26, with the Colosseum): revealed maps 4–11 s,
+radius-6 6–13 s, continents-radius18 56 s, all optimal; shuffle-radius18, continents and
+shuffle hit the limit at gaps 1.35%, 5.1%, 21%. That day's machine was slower: the
+previous version (no Colosseum) ended them at 1.5%, 8%, 18% against 1.3%, 0.07%, 0.33%
+the day before, so compare runs from the same day (time-limited gaps vary between runs).
 
 ## Status (2026-11-26)
 
@@ -59,7 +74,8 @@ limit at gaps 0.05%, 1.3%, 0.07%, 0.33%.
 - In game, placing a 142-tack plan (16 cities) seemed to freeze the game after
   Ctrl+Shift+T (probably Detailed Map Tacks recomputing for each tack). Not fixed; the
   proposed fix is fewer tacks in game (no improvement tacks, only what is due soon).
-- Next topic: wonders.
+- Entertainment Complex and Colosseum added 2026-11-26 (amenities, constraints (12)–(14)).
+- Next topic: more wonders (read the remaining placement rules first).
 - Ideas discussed, not started: an expansion rule (new cities within 6–8 tiles of an
   earlier one), an LLM around the optimiser (explaining plans by re-solving what-if
   questions; tuning the objective's weights from a player's feedback by inverse
@@ -67,23 +83,28 @@ limit at gaps 0.05%, 1.3%, 0.07%, 0.33%.
 
 ## Code map: `model/`
 
-- `plan.py`: `Plan` (the result: `cities`, `districts` and `improvements` as (type, tile,
-  city), `info` with solver status, `config`; `planned()`, `improved()`), `CITY_CENTER`.
-- `values.py`: `site_value`, `improvement_value`, `covered_value`, `regional_value`.
-- `existing.py`: what the player already has (cities and their districts, improvements).
+- `plan.py`: `Plan` (the result: `cities`, `districts`, `improvements` and `wonders` as
+  (type, tile, city), `info` with solver status, `config`; `planned()`, `improved()`),
+  `CITY_CENTER`, `WONDER`.
+- `values.py`: `site_value`, `improvement_value`, `covered_value`, `wonder_value`, `regional_value`.
+- `existing.py`: what the player already has (cities and their districts, improvements,
+  wonders, and the amenities those give: `existing_amenities`).
 - `instance.py`: `Instance` (candidate sites, district tiles `spots`, improvement options
-  `ispots`, and the variables once created: `x` cities, `z` districts, `y`, `w`
-  improvements, `q`, `r`/`on`).
+  `ispots`, wonder tiles `wspots` with the (city, district tile) pairs that may build
+  each, and the variables once created: `x` cities, `z` districts, `y`, `w`
+  improvements, `q`, `r`/`on`, `k` wonders, `a` amenities).
 - `preprocess.py`: `prepare()` builds the Instance (`city_sites`, `district_spots`,
-  `improvement_options`).
+  `improvement_options`, `wonder_spots`).
 - `formulation/`: one file per feature holding its variables, constraints and objective
   terms (`cities`, `districts`, `district_rules`, `tiles`, `neighbour_bonus`,
-  `improvements`, `improvement_bonus`, `regional`); `__init__.py` registers them in the
+  `improvements`, `improvement_bonus`, `regional`, `wonders`, `amenities`); `__init__.py`
+  registers them in the
   `VARIABLES`, `CONSTRAINTS`, `OBJECTIVE` lists and `build()` runs them, logging what
   each adds.
 - `solve.py`: `optimise()` (prepare, build, solve), `postprocess.py`: `read_plan`.
 - `evaluate.py`: `evaluate(gmap, rules, plan)` scores any plan in plain Python (the MIP's
-  or the greedy stub's), bonuses left out, returning (score, parts); `regional_cover`.
+  or the greedy stub's), bonuses left out, returning (score, parts); `regional_cover`,
+  `city_amenities`.
   Tests require MIP objective = evaluate + bonuses.
 - `solver.py` (outside the package): `Model` (`var`, `row`, `add_obj`), solved through
   `scipy.optimize.milp`; `capture.py` captures HiGHS's log.
@@ -98,7 +119,8 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
 
 - `src/civ6_planner/`: `dump.py` (read `MAPDUMP|…` records from saves), `gamemap.py`
   (hex grid), `rules/` (rules from the game DB: `tables.py` types and defaults,
-  `database.py`, `placement.py`, `adjacency.py`, the `Rules` class in `rules.py`),
+  `database.py`, `placement.py` (incl. `can_place_wonder`), `adjacency.py`, the `Rules`
+  class in `rules.py`),
   `planner.py` (decisions: `mip` or the old stub in `greedy.py`; tacks and notes),
   `model/` (the optimiser, see the code map above), `config.py` (loads the settings),
   `solver.py` (small MIP modelling layer over HiGHS via `scipy.optimize.milp`),
@@ -110,7 +132,7 @@ Civ VI + mod/mapdump ──(dump stored in game config → every save)──▶ 
   override with `CIV6_USER_DIR`), `cli/` (`__init__.py` the parser, `maps.py` which map
   and settings, `commands.py` one function per command). Keep files short: a few
   functions each, split by topic. Tests: `tests/test_<area>.py` (geometry, rules,
-  greedy, solver, optimiser, regional, improvements, validate, data, config), sharing
+  greedy, solver, optimiser, regional, improvements, amenities, validate, data, config), sharing
   the small maps in `tests/helpers.py`.
 - `config/default.toml`: every model and solver parameter (cities and districts to
   plan, yield weights, bonuses, site radius, loss factor, HiGHS options). `--config FILE`

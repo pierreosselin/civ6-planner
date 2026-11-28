@@ -1,11 +1,17 @@
 """Preprocessing: the candidate sets the MIP chooses from (city sites, district tiles,
-improvement options) and their values; no variables yet."""
+improvement options, wonder tiles) and their values; no variables yet."""
 from __future__ import annotations
 
 from ..config import Config
 from ..gamemap import XY, GameMap, Tile
 from ..rules import Rules
-from .existing import existing_cities, existing_improvements
+from .existing import (
+    district_cities,
+    existing_amenities,
+    existing_cities,
+    existing_improvements,
+    wonders_on_map,
+)
 from .instance import Instance
 from .values import improvement_value, site_value
 
@@ -65,8 +71,45 @@ def improvement_options(gmap: GameMap, rules: Rules, cfg: Config, reserved: set[
     return ispots
 
 
+def wonder_spots(gmap: GameMap, rules: Rules, reserved: set[XY], wonders: tuple[str, ...], cities: list[XY],
+                 spots: dict[tuple[str, XY], list[XY]],
+                 candidates: int) -> dict[tuple[str, XY], list[tuple[XY, XY | None]]]:
+    """(wonder, tile) -> who may build it there: (city, the tile of the district of that
+    city it must touch (WonderRule.adjacent_district: a planned spot or an existing one),
+    or None if it needs none), for tiles within the city's range. Wonders already on the
+    map are left out (one per world). Only each wonder's `candidates` best tiles are kept:
+    those with the most cities (candidate or existing) within its range (with all 481 on
+    continents, HiGHS couldn't solve the root LP in 60 s)."""
+    built = {w for w, _ in wonders_on_map(gmap).values()}
+    owner = district_cities(gmap)
+    places = set(cities)
+    out: dict[tuple[str, XY], list[tuple[XY, XY | None]]] = {}
+    for b in wonders:
+        rule = rules.wonders.get(b)
+        if rule is None or b in built:
+            continue
+        tiles: dict[XY, list[tuple[XY, XY | None]]] = {}
+        for c in cities:
+            mine = set(spots.get((rule.adjacent_district, c), ())) if rule.adjacent_district else set()
+            mine |= {u for u, city in owner.items() if city == c and gmap.tiles[u]["district"] == rule.adjacent_district}
+            for n in gmap.within(gmap.tiles[c], rules.district_range):
+                t = (n["x"], n["y"])
+                if t in reserved or not rules.can_place_wonder(gmap, n, b):
+                    continue
+                if rule.adjacent_district is None:
+                    support: list[tuple[XY, XY | None]] = [(c, None)]
+                else:
+                    support = [(c, (m["x"], m["y"])) for m in gmap.neighbours(n) if (m["x"], m["y"]) in mine]
+                if support:
+                    tiles.setdefault(t, []).extend(support)
+        reach = {t: sum((n["x"], n["y"]) in places for n in gmap.within(t, rule.range)) for t in tiles}
+        for t in sorted(tiles, key=lambda t: (-reach[t], t))[:candidates]:
+            out[b, t] = tiles[t]
+    return out
+
+
 def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, districts: tuple[str, ...],
-            max_city_candidates: int, improvements: tuple[str, ...] = ()) -> Instance:
+            max_city_candidates: int, improvements: tuple[str, ...] = (), wonders: tuple[str, ...] = ()) -> Instance:
     """The Instance a MIP is built from. n_cities "max": as many as fit."""
     reserved = reserved_tiles(gmap)
     site = city_sites(gmap, rules, cfg, reserved, max_city_candidates)
@@ -77,9 +120,12 @@ def prepare(gmap: GameMap, rules: Rules, cfg: Config, n_cities: int | str, distr
     districts = tuple(districts)
     improvements = tuple(i for i in improvements if i in rules.improvements)
     improvements_left = {e: max(0, cfg.max_improvements - n) for e, n in existing_improvements(gmap, rules).items()}
+    spots = district_spots(gmap, rules, reserved, districts, sites + own, built)
+    wonders = tuple(w for w in wonders if w in rules.wonders)
     return Instance(
         gmap, rules, cfg, len(sites) if n_cities == "max" else int(n_cities), districts, sites, site,
-        own, specialty_left, district_spots(gmap, rules, reserved, districts, sites + own, built),
-        rules.neighbour_bonuses(districts), improvements,
+        own, specialty_left, spots, rules.neighbour_bonuses(districts), improvements,
         improvement_options(gmap, rules, cfg, reserved, improvements, sites + own),
-        improvements_left, rules.improvement_bonuses(districts, improvements))
+        improvements_left, rules.improvement_bonuses(districts, improvements),
+        wonders, wonder_spots(gmap, rules, reserved, wonders, sites + own, spots, cfg.wonder_candidates),
+        existing_amenities(gmap, rules, sites + own))

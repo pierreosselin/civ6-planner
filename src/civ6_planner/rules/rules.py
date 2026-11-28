@@ -8,9 +8,10 @@ from ..gamemap import XY, GameMap, Tile
 from . import adjacency as _adjacency
 from . import placement as _placement
 from .database import read_rules
-from .tables import (DAM_DISTRICTS, DEFAULT_ADJACENCIES, DEFAULT_IMPROVEMENTS, DEFAULT_PLACEMENT,
-                     DEFAULT_REGIONAL, DEFAULT_REQUIRED_FEATURES, DEFAULT_SPECIALTY, AdjacencyRule,
-                     ImprovementRule, RegionalBuilding)
+from .tables import (DAM_DISTRICTS, DEFAULT_ADJACENCIES, DEFAULT_ENTERTAINMENT, DEFAULT_IMPROVEMENTS,
+                     DEFAULT_PLACEMENT, DEFAULT_REGIONAL, DEFAULT_REMOVABLE_FEATURES, DEFAULT_REQUIRED_FEATURES,
+                     DEFAULT_SPECIALTY, DEFAULT_WONDERS, AdjacencyRule, ImprovementRule, RegionalBuilding,
+                     WonderRule)
 
 
 class Rules:
@@ -21,7 +22,10 @@ class Rules:
                  required_features: dict[str, set[str]] | None = None,
                  valid_terrains: dict[str, set[str]] | None = None,
                  improvements: dict[str, ImprovementRule] | None = None,
-                 regional: dict[str, RegionalBuilding] | None = None):
+                 regional: dict[str, RegionalBuilding] | None = None,
+                 entertainment: dict[str, int] | None = None,
+                 removable_features: tuple[str, ...] | None = None,
+                 wonders: dict[str, WonderRule] | None = None):
         # A new city centre must be more than city_min_range tiles from any other.
         self.city_min_range = city_min_range
         # Districts go within district_range tiles of their city centre.
@@ -39,6 +43,12 @@ class Rules:
         self.improvements = dict(DEFAULT_IMPROVEMENTS if improvements is None else improvements)
         # Building -> its regional effect (district, range, yields).
         self.regional = dict(DEFAULT_REGIONAL if regional is None else regional)
+        # District -> amenities it gives its own city (Districts.Entertainment).
+        self.entertainment = dict(DEFAULT_ENTERTAINMENT if entertainment is None else entertainment)
+        # Features a wonder clears when placed (Features.Removable).
+        self.removable_features = set(DEFAULT_REMOVABLE_FEATURES if removable_features is None else removable_features)
+        # Wonder -> where it may go and what it gives.
+        self.wonders = dict(DEFAULT_WONDERS if wonders is None else wonders)
 
     @classmethod
     def from_game(cls, db_path: str = paths.GAMEPLAY_DB) -> Rules:
@@ -52,6 +62,9 @@ class Rules:
 
     def can_place_district(self, gmap: GameMap, tile: Tile, district: str = "DISTRICT_CAMPUS") -> bool:
         return _placement.can_place_district(self, gmap, tile, district)
+
+    def can_place_wonder(self, gmap: GameMap, tile: Tile, wonder: str) -> bool:
+        return _placement.can_place_wonder(self, gmap, tile, wonder)
 
     def can_place_improvement(self, gmap: GameMap, tile: Tile, improvement: str) -> bool:
         return _placement.can_place_improvement(self, gmap, tile, improvement)

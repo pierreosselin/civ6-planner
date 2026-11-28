@@ -63,13 +63,16 @@ checked against each other. Defaults are those of <code>config/default.toml</cod
 <ul>
   <li>tiles on which to found <b>new cities</b> (by default as many as fit), and</li>
   <li>for each new city and each of the player's <b>existing cities</b>, a tile for each planned <b>district</b> it does not
-  have yet (Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor, Aqueduct, Dam),</li>
+  have yet (Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor, Aqueduct, Dam,
+  Entertainment Complex),</li>
   <li>for each city, up to five tiles to <b>improve</b> (Farm, Mine, Quarry, Plantation, Camp, Pasture, Fishing Boats,
   Lumber Mill),</li>
+  <li>a tile for the <b>Colosseum</b>, a world wonder, next to one city's Entertainment Complex,</li>
 </ul>
-<p>so as to maximise the weighted yields of the city sites, the districts' adjacency bonuses and the improved (worked)
-tiles, minus the yields of the tiles the districts cover. The game's placement rules are enforced partly by which variables exist (sets \(C\) and
-\(R_{d,c}\), \(G_{i,c}\)) and partly by linear constraints (1)–(11).</p>
+<p>so as to maximise the weighted yields of the city sites, the districts' adjacency bonuses, the improved (worked)
+tiles and the wonder, plus the <b>amenities</b> each city gets from districts and the wonder, minus the yields of the
+tiles the districts and the wonder cover. The game's placement rules are enforced partly by which variables exist
+(sets \(C\), \(R_{d,c}\), \(G_{i,c}\), \(H_b\)) and partly by linear constraints (1)–(14).</p>
 <p>The model is built in three steps, each a list of small functions in <code>model/formulation/__init__.py</code>:
 <code>VARIABLES</code>, <code>CONSTRAINTS</code>, <code>OBJECTIVE</code>. Commenting out a line drops that constraint or term;
 each run's log lists the ones that were on. Each feature has its own file there (e.g. <code>cities.py</code>: \(x\),
@@ -134,16 +137,20 @@ means \(n = |C|\), so only the spacing rule limits how many are founded.</div>
 
 <h2 id="districts">5. Districts and where they may go</h2>
 <div class="def"><b>District types.</b> \(D\) = <code>problem.districts</code>: Campus, Industrial Zone, Commercial Hub, Holy
-Site, Theater, Encampment, Harbor, Aqueduct, Dam. (The Entertainment Complex is left out on purpose.) Subsets, read
-from the <code>Districts</code> table unless marked:
+Site, Theater, Encampment, Harbor, Aqueduct, Dam, Entertainment Complex. Subsets, read from the <code>Districts</code>
+table unless marked:
 <ul>
   <li>\(D^{\text{coast}}\): districts with <code>Coast</code> = 1 (the Harbor);</li>
   <li>\(D^{\text{far}}\): districts with <code>NoAdjacentCity</code> = 1 (the Encampment);</li>
   <li>\(D^{\text{aq}}\): districts with <code>Aqueduct</code> = 1 (the Aqueduct);</li>
   <li>\(D^{\text{dam}}\): the Dam (engine rule: no flag in the database);</li>
   <li>\(D^{\text{pop}}\): specialty districts, <code>RequiresPopulation</code> = 1: all planned districts but the Aqueduct and the
-  Dam. For \(e\in E\), \(\beta_e = |B_e\cap D^{\text{pop}}|\) is the number it already has.</li>
-</ul></div>
+  Dam. For \(e\in E\), \(\beta_e = |B_e\cap D^{\text{pop}}|\) is the number it already has;</li>
+  <li>\(D^{\text{nb}}\subseteq D\): districts without the placement bonus \(\beta_D\) (<code>objective.no_bonus_districts</code>:
+  the Entertainment Complex), worth only what they give (§8).</li>
+</ul>
+Each district \(d\) gives \(\epsilon_d\) amenities to its own city (<code>Districts.Entertainment</code>: Entertainment
+Complex 1, Dam 1, the others 0).</div>
 <div class="def"><b>Fresh-water source.</b> \(F\subseteq T\): tiles that touch a river, or have a lake, mountain or oasis
 neighbour. An engine rule for aqueducts, not in the database. <span class="muted"><code>Rules.fresh_water_source</code>.</span></div>
 <div class="def"><b>Valid tiles</b> \(V_d\subseteq T\) for district \(d\): \(t\in V_d\) if and only if
@@ -198,6 +205,35 @@ with \(\mu\) = <code>objective.worked_tile_factor</code> (1). Improving an alrea
 kept for improvement \(i\). <span class="muted">A simplification for speed: with all options, the full maps hit the time
 limit; with \(J=6\), one more than the five a city may build, a city can still swap a tile a district takes.</span></div>
 
+<h3>Wonders</h3>
+<div class="def"><b>Wonder types.</b> \(\mathcal{W}\) = <code>problem.wonders</code>: the Colosseum. Each wonder \(b\) has, from the
+<code>Buildings</code> table and its <code>Building_*</code> tables: valid terrains (<code>Building_ValidTerrains</code>; the
+Colosseum: flat desert, grassland, plains, tundra, snow, so no hills), valid features (<code>Building_ValidFeatures</code>;
+none for the Colosseum), the district it must touch \(d_b\) (<code>AdjacentDistrict</code>: the Entertainment Complex),
+its weighted yields \(g_b\) (<code>Building_YieldChanges</code>: +2 culture, \(g=1\)), and the amenities \(\epsilon_b\) it gives
+every city within \(r_b\) tiles (<code>Entertainment</code> 2, <code>RegionalRange</code> 6). One of each in the world
+(<code>MaxWorldInstances</code> = 1). <span class="muted"><code>read_wonders</code>.</span></div>
+<div class="def"><b>Valid tiles</b> \(V_b\subseteq\Lambda\setminus P\) for wonder \(b\): no city or district; a terrain \(b\) allows; no
+feature, or one the wonder clears (<code>Features.Removable</code>: woods, rainforest, marsh), or one \(b\) lists (so not
+floodplains for the Colosseum); no luxury or strategic resource (as districts). A wonder with a placement requirement
+not read yet (<code>RequiresRiver</code>, <code>Coast</code>, <code>AdjacentToMountain</code>, <code>Building_RequiredFeatures</code>, …)
+has \(V_b=\emptyset\). <span class="muted"><code>Rules.can_place_wonder</code>.</span></div>
+<div class="def"><b>Candidate tiles.</b> A city \(c\in C\cup E\) may build \(b\) on \(t\in N_{\rho_D}(c)\cap V_b\) when \(c\) has, or may
+get, its \(d_b\) on a neighbour of \(t\):
+$$ \Sigma_{b,t} \;=\; \{\,(c,u) \;:\; t\in N_{\rho_D}(c),\ u\in N_1(t),\ u\in R_{d_b,c} \text{ or } u \text{ holds } c\text{'s existing } d_b\,\}, \qquad
+H_b \;=\; \{\,t\in V_b : \Sigma_{b,t}\ne\emptyset\,\}. $$
+Of these, \(H_b\) keeps only the \(J_W\) tiles with the most cities (candidate or existing) within \(r_b\)
+(<code>problem.wonder_candidates</code>, 1); \(H_b=\emptyset\) if \(b\) is already on the map (anyone's).
+<span class="muted"><code>wonder_spots</code>. A simplification for speed, like \(J\) for improvements. With all valid tiles
+(481 on continents) HiGHS could not solve the first LP within the 60 s limit and returned no plan. With 10, the root LP
+was as fast as without the wonder, but the maps that hit the time limit ended 24–29% from optimal (against 1.5–18%
+before), with worse plans and no Colosseum. With 1 they end where they did before, with the Colosseum. On the small
+maps, 10 tiles gain at most 8 (continents-revealed: 458 against 450). Even with one tile the model decides jointly
+whether to build the Colosseum, which city builds the Entertainment Complex next to it, and where the cities go
+around it.</span></div>
+<div class="def"><b>Amenities already there.</b> \(\alpha^0_c\) for \(c\in C\cup E\): \(\sum_{d\in B_c}\epsilon_d\) (existing cities), plus
+\(\epsilon_b\) for each of the player's built wonders within \(r_b\) of \(c\). <span class="muted"><code>existing_amenities</code>.</span></div>
+
 <h2 id="adjacency">6. Adjacency</h2>
 <p>Each district type \(d\) has a set of adjacency rules \(\mathcal{A}_d\) read from the game database
 (<code>District_Adjacencies</code> joined with <code>Adjacency_YieldChanges</code>; <code>Rules._read_adjacencies</code>). Rules
@@ -221,7 +257,7 @@ $$ A_{d,k}(t;\Pi) \;=\; \sum_{\alpha\in\mathcal{A}_d:\,k_\alpha=k} \Delta_\alpha
   <tr><td>terrain, feature, improvement</td><td><code>AdjacentTerrain</code>, <code>AdjacentFeature</code>, <code>AdjacentImprovement</code></td><td>\(u\) has it</td></tr>
   <tr><td>resource class</td><td><code>AdjacentResourceClass</code></td><td>\(u\)'s visible resource is of that class (e.g. strategic)</td></tr>
   <tr><td>sea resource</td><td><code>AdjacentSeaResource</code></td><td>\(u\) is water with a visible resource</td></tr>
-  <tr><td>wonder, natural wonder</td><td><code>AdjacentWonder</code>, <code>AdjacentNaturalWonder</code></td><td>\(u\) holds one</td></tr>
+  <tr><td>wonder, natural wonder</td><td><code>AdjacentWonder</code>, <code>AdjacentNaturalWonder</code></td><td>\(u\) holds one (a planned wonder: \(\Pi(u)\) = <code>DISTRICT_WONDER</code>, which also counts as a district)</td></tr>
   <tr><td>river</td><td><code>AdjacentRiver</code></td><td>the district's own tile \(t\) touches a river (counted once)</td></tr>
 </table>
 <div class="def"><b>Adjacency coefficient used by the MIP.</b> For \((d,c,t)\) with \(t\in R_{d,c}\), the planned set holds
@@ -240,6 +276,7 @@ cities and districts do not (see <a href="#limits">§15</a>).
   <tr><td>Theater</td><td>+2 culture per wonder; +2 next to an Entertainment Complex, Water Park, Hippodrome or Street Carnival; +2 next to Pamukkale; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
   <tr><td>Harbor</td><td>+2 gold next to the city centre; +1 per sea resource; +1 per 2 districts; +1 next to a Government Plaza</td></tr>
   <tr><td>Encampment, Aqueduct, Dam</td><td>none (the Aqueduct's and Dam's value is housing, not modelled; each gives the Industrial Zone +2)</td></tr>
+  <tr><td>Entertainment Complex</td><td>none: its value is its amenity and the Colosseum it allows (§7); it gives a Theater next to it +2 culture</td></tr>
 </table>
 
 <h2 id="variables">7. Decision variables</h2>
@@ -270,7 +307,8 @@ $$
 <p>Let \(\mathcal{B}\) be the set of pairs \((d,d')\in D\times D\), \(d\ne d'\), such that \(\mathcal{A}_d\) has a one-tile rule
 "\(+\Delta\) of yield \(k\) per neighbouring \(d'\)"; its weighted value is \(b_{d,d'}=\sum w_k\Delta\) over those rules
 (<code>Rules.neighbour_bonuses</code>). With the default districts:
-Industrial Zone next to Aqueduct or Dam (+2 production each, \(b=4\)) and Commercial Hub next to Harbor (+2 gold, \(b=1\)). For
+Industrial Zone next to Aqueduct or Dam (+2 production each, \(b=4\)), Commercial Hub next to Harbor (+2 gold, \(b=1\)) and
+Theater next to Entertainment Complex (+2 culture, \(b=1\)). For
 \((d,d')\in\mathcal{B}\), a city \(c\) and \(t\in R_{d,c}\) with \(N_1(t)\cap R_{d',c}\ne\emptyset\):</p>
 <div class="card">
 $$
@@ -304,6 +342,22 @@ $$
 tile of \(P_b\) has \(r_{b,e}=1\) fixed. The \(o\) variables keep the reach rows short: one term per tile within range
 instead of one per (city, tile).</p>
 
+<h3>Wonders and amenities</h3>
+<div class="card">
+$$
+\begin{aligned}
+k_{b,t} &\in \{0,1\} && b\in\mathcal{W},\ t\in H_b && \text{wonder } b \text{ goes on } t && \texttt{wonder\_vars}\\
+\alpha_c &\in [0,\bar\alpha] && c\in C\cup E \text{ with a source} && \text{amenities counted for city } c && \texttt{amenity\_vars}
+\end{aligned}
+$$
+</div>
+<p class="muted">\(k\) has no city index: the city building the wonder is the one whose \(d_b\) next to \(t\) is planned or built
+(read back after solving), and the amenity rows (14) need one term per tile. \(\bar\alpha\) = <code>objective.amenities_needed</code>
+(2): amenities beyond it are worth nothing (luxuries cover the rest of a city's need; in the game a city is
+"content" from 0 to +2 surplus amenities, with no yield change). A city has a source when one of its districts
+gives amenities, a wonder tile is within range, or \(\alpha^0_c&gt;0\). Continuous: at an optimum \(\alpha_c\) is the
+smaller of \(\bar\alpha\) and what the city gets.</p>
+
 <h2 id="objective">8. Objective</h2>
 <p>Maximise</p>
 <div class="card">
@@ -315,8 +369,10 @@ f(x,z) \;=\; \underbrace{\sum_{c\in C} s_c\,x_c}_{\texttt{site\_term}}
 \;+\; \underbrace{\sum_{Q} h_{i,t}\,\omega_{i,c,t}}_{\texttt{improvement\_term}}
 \;+\; \underbrace{\sum e_{d,i}\,q_{d,i,c,u}}_{\texttt{improvement\_bonus\_term}}
 \;+\; \underbrace{\sum g_b\,r_{b,c}}_{\texttt{regional\_term}}
+\;+\; \underbrace{\sum_{b,t}\big(g_b-\lambda v(t)\big)\,k_{b,t}}_{\texttt{wonder\_term}}
+\;+\; \underbrace{\gamma\sum_{c}\alpha_c}_{\texttt{amenity\_term}}
 \;+\; \underbrace{\beta_C\sum_{c\in C} x_c}_{\texttt{city\_bonus\_term}}
-\;+\; \underbrace{\beta_D\!\!\sum_{(d,c,t)\in Z}\!\! z_{d,c,t}}_{\texttt{district\_bonus\_term}}
+\;+\; \underbrace{\beta_D\!\!\sum_{(d,c,t)\in Z,\ d\notin D^{\text{nb}}}\!\! z_{d,c,t}}_{\texttt{district\_bonus\_term}}
 $$
 </div>
 <ul>
@@ -325,6 +381,11 @@ $$
   <li>\(\beta_C\), \(\beta_D\) (<code>objective.city_bonus</code> 100, <code>objective.district_bonus</code> 10): placement
   bonuses. Without them a district whose \(a_{d,c,t}-\lambda v(t)\) is negative would not be built (the constraints only
   say "at most"); with them, building is preferred. See <a href="#properties">§11</a>.</li>
+  <li>\(\gamma\) (<code>objective.amenity_value</code>, 4): the value of one amenity a city needs, in weighted yields (a
+  placeholder, like the weights). The Entertainment Complex gets no \(\beta_D\) (\(D^{\text{nb}}\)): alone it is worth
+  \(\gamma\epsilon_d - \lambda v(t) \approx 3\), less than the 10 a Campus or an Encampment gets for its slot, so a city builds
+  one only where the Colosseum next to it pays: \(2\gamma = 8\) for every city within 6 tiles that lacks the amenities.
+  On the test maps that is a single Entertainment Complex.</li>
 </ul>
 
 <h2 id="constraints">9. Constraints</h2>
@@ -364,7 +425,7 @@ $$ \sum_{t\in R_{d,c}} z_{d,c,t} \;\le\; x_c \quad \forall\, c\in C,\ d\in D, \q
 \sum_{t\in R_{d,e}} z_{d,e,t} \;\le\; 1 \quad \forall\, e\in E,\ d\in D\setminus B_e . $$
 
 <h3><span class="tag">(4)</span>At most one thing per tile · <code>one_thing_per_tile</code></h3>
-$$ [t\in C]\,x_t \;+\; \sum_{(d,c):\,(d,c,t)\in Z} z_{d,c,t} \;\le\; 1 \qquad \forall\, t\in T $$
+$$ [t\in C]\,x_t \;+\; \sum_{(d,c):\,(d,c,t)\in Z} z_{d,c,t} \;+\; \sum_{(i,c)} \omega_{i,c,t} \;+\; \sum_{b:\,t\in H_b} k_{b,t} \;\le\; 1 \qquad \forall\, t\in T $$
 <p class="muted">Written only for tiles with at least two terms. It stops two districts (of one city or of different
 cities) from sharing a tile, and a district from going on a tile chosen as a new city centre. Existing city centres
 and districts are already outside every \(V_d\).</p>
@@ -417,17 +478,33 @@ without it, although the plan solved without it is feasible and reaches every ci
 ends up within 6 tiles of an Industrial Zone anyway). Commenting out (11) alone restores the solve times, so the rows
 (11) are the cost. Starting HiGHS from the plan without it would fix that (scipy can't pass a start; highspy can).</p>
 
+<h3><span class="tag">(12)</span>A wonder only next to its city's district · <code>wonder_needs_district</code></h3>
+$$ k_{b,t} \;\le\; \sum_{(c,u)\in\Sigma_{b,t}} z_{d_b,c,u} \qquad \forall\, b,\ t\in H_b, \ \text{unless some } (c,u)\in\Sigma_{b,t} \text{ is an existing } d_b . $$
+<p class="muted">For a wonder that needs no district, the terms are \(x_c\) of the cities in range (none if one is existing).</p>
+
+<h3><span class="tag">(13)</span>One of each wonder · <code>one_of_each_wonder</code></h3>
+$$ \sum_{t\in H_b} k_{b,t} \;\le\; 1, \qquad \sum_{t\in H_b} k_{b,t} \;\le\; \sum_{(c,u)\in\bigcup_t\Sigma_{b,t}} z_{d_b,c,u} \qquad \forall\, b . $$
+<p class="muted">The second row is implied for integers, but without it the relaxation put a whole Colosseum next to 0.21
+of an Entertainment Complex: one \(z\) bounds \(k\) on each of its six neighbours in (12).</p>
+
+<h3><span class="tag">(14)</span>Amenities only from what the city gets · <code>amenity_supply</code></h3>
+$$ \alpha_c \;\le\; \alpha^0_c + \sum_{(d,c,t)\in Z} \epsilon_d\, z_{d,c,t} + \sum_{b}\ \sum_{t\in H_b,\ \delta(c,t)\le r_b} \epsilon_b\, k_{b,t},
+\qquad \alpha_c \;\le\; \bar\alpha\, x_c\ \ (c\in C). $$
+<p class="muted">This couples cities: one Colosseum serves every city within 6 tiles, its own city's included, so
+the model places it centrally.</p>
+
 <h2 id="full">10. The full programme</h2>
 <div class="card">
 $$
 \begin{aligned}
 \max_{x,\,z,\,y,\,\omega,\,q}\quad & \sum_{c\in C}(s_c+\beta_C)\,x_c \;+\; \sum_{(d,c,t)\in Z}\big(a_{d,c,t}-\lambda\,v(t)+\beta_D\big)\,z_{d,c,t}
-\;+\; \sum b_{d,d'}\,y_{d,d',c,t} \;+\; \sum_Q h_{i,t}\,\omega_{i,c,t} \;+\; \sum e_{d,i}\,q_{d,i,c,u} \;+\; \sum g_b\,r_{b,c}\\[4pt]
+\;+\; \sum b_{d,d'}\,y_{d,d',c,t} \;+\; \sum_Q h_{i,t}\,\omega_{i,c,t} \;+\; \sum e_{d,i}\,q_{d,i,c,u} \;+\; \sum g_b\,r_{b,c}\\
+& \;+\; \textstyle\sum_{b,t}\big(g_b-\lambda v(t)\big)k_{b,t} \;+\; \gamma\sum_c \alpha_c \;-\; \beta_D\sum_{d\in D^{\text{nb}}} z_{d,c,t}\\[4pt]
 \text{s.t.}\quad & \textstyle\sum_{c\in C} x_c \le n && (1)\\
 & \textstyle\sum_{c\in Q} x_c \le 1 \ \ \forall Q\in\mathcal{Q}, \qquad x_a+x_b\le 1 \ \ \forall\{a,b\}\in U && (2)\\
 & \textstyle\sum_{t\in R_{d,c}} z_{d,c,t} \le x_c \ \ \forall c\in C,\, d\in D && (3a)\\
 & \textstyle\sum_{t\in R_{d,e}} z_{d,e,t} \le 1 \ \ \forall e\in E,\, d\in D\setminus B_e && (3b)\\
-& \textstyle [t\in C]\,x_t + \sum_{(d,c):(d,c,t)\in Z} z_{d,c,t} \le 1 \ \ \forall t\in T && (4)\\
+& \textstyle [t\in C]\,x_t + \sum_{(d,c)} z_{d,c,t} + \sum_{(i,c)} \omega_{i,c,t} + \sum_b k_{b,t} \le 1 \ \ \forall t\in T && (4)\\
 & z_{d,c,t} + x_{c'} \le 1 \ \ \forall (d,c,t)\in Z,\ d\in D^{\text{far}},\ c'\in C\cap N_1(t)\setminus\{c\} && (5)\\
 & y_{d,d',c,t} \le z_{d,c,t},\ \ y_{d,d',c,t} \le \textstyle\sum_{u\in N_1(t)\cap R_{d',c}} z_{d',c,u},\ \ \sum_t y_{d,d',c,t} \le \sum_{u} z_{d',c,u} && (6)\\
 & \textstyle\sum_{d\in D^{\text{dam}},\,\text{riv}(t)=r} z_{d,c,t} \le 1 \ (0 \text{ if dammed}) \ \ \forall \text{ rivers } r && (7)\\
@@ -435,7 +512,10 @@ $$
 & \textstyle\sum_{(i,t)} \omega_{i,c,t} \le L x_c,\ \sum_i \omega_{i,c,t}\le x_c \ \forall c\in C, \qquad \sum_{(i,t)} \omega_{i,e,t} \le \max(0,L-\ell_e) \ \forall e\in E && (9)\\
 & q_{d,i,c,u} \le \omega_{i,c,u},\ \ q_{d,i,c,u} \le \textstyle\sum_{t\in N_1(u)\cap R_{d,c}} z_{d,c,t} && (10)\\
 & o_{b,t} \le \textstyle\sum_c z_{d_b,c,t},\ \ r_{b,c} \le x_c,\ \ r_{b,c} \le \sum_{t\in N_{r_b}(c)} o_{b,t} \ (\text{unless reached by } P_b) && (11)\\
-& x\in\{0,1\}^{C},\quad z\in\{0,1\}^{Z},\quad \omega\in\{0,1\}^{Q},\quad y, q, o, r\in[0,1]
+& k_{b,t} \le \textstyle\sum_{(c,u)\in\Sigma_{b,t}} z_{d_b,c,u} \ (\text{unless built}) && (12)\\
+& \textstyle\sum_t k_{b,t} \le 1,\ \ \sum_t k_{b,t} \le \sum_{\bigcup_t\Sigma_{b,t}} z_{d_b,c,u} && (13)\\
+& \alpha_c \le \alpha^0_c + \textstyle\sum \epsilon_d z_{d,c,t} + \sum_{\delta(c,t)\le r_b} \epsilon_b k_{b,t},\ \ \alpha_c \le \bar\alpha x_c && (14)\\
+& x\in\{0,1\}^{C},\quad z\in\{0,1\}^{Z},\quad \omega\in\{0,1\}^{Q},\quad k\in\{0,1\},\quad y, q, o, r\in[0,1],\quad \alpha\in[0,\bar\alpha]
 \end{aligned}
 $$
 </div>
@@ -444,7 +524,8 @@ $$
 <ul>
   <li><b>Always feasible.</b> \(x=0, z=0\) satisfies every constraint, so the solver always returns a plan (empty when no
   tile qualifies).</li>
-  <li><b>Districts are built whenever a tile is free.</b> Adding one district to a feasible solution, on a tile
+  <li><b>Districts are built whenever a tile is free</b> (except those in \(D^{\text{nb}}\), the Entertainment Complex).
+  Adding one district to a feasible solution, on a tile
   \(t\in R_{d,c}\) that holds nothing planned and that (5) and (7) allow, for a founded city that lacks \(d\) and is under
   its population limit (8), changes \(f\) by
   \(a_{d,c,t}-\lambda v(t)+\beta_D \ge \beta_D-\lambda v(t)\), since \(a\ge0\). This is positive whenever
@@ -462,13 +543,16 @@ $$
 for any plan (the MIP's or the greedy stub's):</p>
 $$ S \;=\; \sum_{c\ \text{new}} s_c \;+\; \sum_{(d,c,t)\ \text{planned}} v\big(A_{d,\cdot}(t;\Pi^{\text{all}})\big) \;-\; \lambda\!\!\sum_{(d,c,t)\ \text{planned}}\!\! v(t)
 \;+\; \sum_{(i,c,t)\ \text{planned}} h_{i,t}
-\;+\; \sum_{b\in\mathcal{G}} g_b\,\big|\{c \text{ new or existing}:\ \delta(c,t)\le r_b \text{ for a planned or existing } d_b \text{ on } t\}\big|, $$
-<p>where \(\Pi^{\text{all}}\) holds <i>every</i> planned city centre, district and improvement. (Mines and lumber mills count
+\;+\; \sum_{b\in\mathcal{G}} g_b\,\big|\{c \text{ new or existing}:\ \delta(c,t)\le r_b \text{ for a planned or existing } d_b \text{ on } t\}\big|
+\;+\; \sum_{(b,t)\ \text{planned}} \big(g_b - \lambda v(t)\big) \;+\; \gamma \sum_{c} \min\big(\bar\alpha,\ \text{amenities of } c\big), $$
+<p>where \(\Pi^{\text{all}}\) holds <i>every</i> planned city centre, district, wonder and improvement, and a city's amenities
+are \(\alpha^0_c\) plus its planned districts' \(\epsilon_d\) plus \(\epsilon_b\) per planned wonder within \(r_b\)
+(<code>city_amenities</code>). (Mines and lumber mills count
 with the game's floor here, \(\lfloor\text{count}/2\rfloor\), against \(0.5\) each in the MIP, so \(S\) can be slightly
 below the MIP's value for an odd count.) Every predicate is monotone in \(\Pi\),
 so \(A(t;\Pi^{\text{all}})\ge A(t;\{c\mapsto\text{city centre}\})\) and</p>
 $$ S \;\ge\; f(x^\star,z^\star,y^\star) - \beta_C\,|x^\star| - \beta_D\,|z^\star| , $$
-<p>(with the neighbour bonuses \(b\,y\) included in \(f\)), with equality when the only planned-next-to-planned bonuses
+<p>(with the neighbour bonuses \(b\,y\) included in \(f\), and \(\beta_D\) counted only for districts outside \(D^{\text{nb}}\)), with equality when the only planned-next-to-planned bonuses
 are those of §7, the only exception to \(\ge\) being the mine and lumber-mill rounding above. The tests check the equality on
 maps where that holds. The "+n" badges on tacks are the per-yield bonuses \(A_{d,k}(t;\Pi^{\text{all}})\).</p>
 
@@ -479,7 +563,9 @@ the values used.</p>
 <table>
   <tr><th>Symbol</th><th>Setting</th><th>Default</th><th>Meaning</th></tr>
   <tr><td>\(n\)</td><td><code>problem.n_cities</code></td><td><code>"max"</code></td><td>New cities to found; <code>"max"</code> means \(|C|\)</td></tr>
-  <tr><td>\(D\)</td><td><code>problem.districts</code></td><td>the nine above</td><td>Districts planned per city</td></tr>
+  <tr><td>\(D\)</td><td><code>problem.districts</code></td><td>the ten above</td><td>Districts planned per city</td></tr>
+  <tr><td>\(\mathcal{W}\)</td><td><code>problem.wonders</code></td><td><code>["BUILDING_COLOSSEUM"]</code></td><td>World wonders planned (one each, at most)</td></tr>
+  <tr><td>\(J_W\)</td><td><code>problem.wonder_candidates</code></td><td>1</td><td>Best tiles kept per wonder (most cities in range)</td></tr>
   <tr><td>\(M\)</td><td><code>problem.max_city_candidates</code></td><td>400</td><td>Best sites by \(s_c\) kept as \(C\)</td></tr>
   <tr><td>\(I\)</td><td><code>problem.improvements</code></td><td>the eight above</td><td>Improvements planned</td></tr>
   <tr><td>\(L\)</td><td><code>problem.max_improvements</code></td><td>5</td><td>Improvements per city</td></tr>
@@ -492,6 +578,9 @@ the values used.</p>
   <tr><td>\(\mathcal{G}\)</td><td><code>objective.regional_buildings</code></td><td><code>[]</code> (off)</td><td>Buildings whose yields reach every city within their range (§7), e.g. <code>["BUILDING_FACTORY"]</code></td></tr>
   <tr><td>\(\beta_C\)</td><td><code>objective.city_bonus</code></td><td>100</td><td>Per new city</td></tr>
   <tr><td>\(\beta_D\)</td><td><code>objective.district_bonus</code></td><td>10</td><td>Per district</td></tr>
+  <tr><td>\(D^{\text{nb}}\)</td><td><code>objective.no_bonus_districts</code></td><td>Entertainment Complex</td><td>Districts without \(\beta_D\)</td></tr>
+  <tr><td>\(\gamma\)</td><td><code>objective.amenity_value</code></td><td>4</td><td>Value of one amenity a city needs (placeholder)</td></tr>
+  <tr><td>\(\bar\alpha\)</td><td><code>objective.amenities_needed</code></td><td>2</td><td>Amenities per city from districts and wonders that count</td></tr>
 </table>
 
 <h2 id="solving">14. Solving, size and times</h2>
@@ -503,32 +592,31 @@ run's <code>optimisation.log</code>. Status <code>optimal</code> means proven op
 (bonus pair, city, tile of \(R_{d,c}\)) and one \(q\) per (bonus rule, improvement option) with a district tile next to it.
 Rows: one for (1); \(|\mathcal{Q}|+|U|\) for (2); at most \(|D|(|C|+|E|)\) for (3); at most \(|T|\) for (4); one per pair of
 Encampment variable and neighbouring site for (5); two per \(y\) plus one per (bonus pair, city) for (6); one per river
-for (7); one per city for (8); one per city plus one per (new city, improvable tile) for (9); two per \(q\) for (10).</p>
+for (7); one per city for (8); one per city plus one per (new city, improvable tile) for (9); two per \(q\) for (10);
+one per wonder tile for (12), two per wonder for (13), and up to two per city for (14).</p>
 <table>
-  <tr><th>Test case (tiles)</th><th>New cities</th><th>\(|C|\)</th><th>Variables</th><th>Rows</th><th>Time</th></tr>
-  <tr><td>continents-revealed (43)</td><td>5</td><td>38</td><td>5,184</td><td>4,673</td><td>0.9 s</td></tr>
-  <tr><td>continents-radius6 (127)</td><td>12</td><td>103</td><td>17,146</td><td>16,274</td><td>5.8 s</td></tr>
-  <tr><td>continents (3,404)</td><td>56</td><td>400</td><td>69,980</td><td>54,108</td><td>11 s</td></tr>
-  <tr><td>shuffle-revealed (43)</td><td>5</td><td>38</td><td>5,338</td><td>4,835</td><td>3.8 s</td></tr>
-  <tr><td>shuffle-radius6 (127)</td><td>12</td><td>109</td><td>18,371</td><td>16,889</td><td>6.2 s</td></tr>
-  <tr><td>shuffle (3,404)</td><td>57</td><td>400</td><td>72,579</td><td>54,237</td><td>32 s</td></tr>
-  <tr><td>continents-radius18 (967)</td><td>34</td><td>275</td><td>48,894</td><td>42,130</td><td>55 s</td></tr>
-  <tr><td>shuffle-radius18 (1,008)</td><td>35</td><td>312</td><td>60,146</td><td>51,386</td><td>60 s limit, gap 1.24%</td></tr>
-  <tr><td>continents, all sites (3,404)</td><td>88</td><td>710</td><td>117,817</td><td>100,902</td><td>60 s limit, gap 0.016%</td></tr>
-  <tr><td>shuffle, all sites (3,404)</td><td>78</td><td>673</td><td>115,859</td><td>95,631</td><td>60 s limit, gap 16.5%</td></tr>
+  <tr><th>Test case (tiles)</th><th>New cities</th><th>\(|C|\)</th><th>Variables</th><th>Rows</th><th>Time (gap)</th><th>Before the Colosseum</th></tr>
+  <tr><td>continents-revealed (43)</td><td>5</td><td>38</td><td>6,619</td><td>6,221</td><td>3.8 s</td><td>1.1 s</td></tr>
+  <tr><td>shuffle-revealed (43)</td><td>5</td><td>38</td><td>6,749</td><td>6,363</td><td>11.4 s</td><td>6.8 s</td></tr>
+  <tr><td>continents-radius6 (127)</td><td>12</td><td>103</td><td>22,118</td><td>21,539</td><td>6.0 s</td><td>7.3 s</td></tr>
+  <tr><td>shuffle-radius6 (127)</td><td>12</td><td>109</td><td>23,359</td><td>22,201</td><td>13.2 s</td><td>18.0 s</td></tr>
+  <tr><td>continents-radius18 (967)</td><td>34</td><td>275</td><td>63,426</td><td>57,348</td><td>55.9 s</td><td>60 s limit (0.06%)</td></tr>
+  <tr><td>shuffle-radius18 (1,008)</td><td>35</td><td>312</td><td>76,747</td><td>68,864</td><td>60 s limit (1.35%)</td><td>60 s limit (1.5%)</td></tr>
+  <tr><td>continents, all sites (3,404)</td><td>86</td><td>710</td><td>151,730</td><td>136,660</td><td>60 s limit (5.1%)</td><td>60 s limit (8.0%)</td></tr>
+  <tr><td>shuffle, all sites (3,404)</td><td>78</td><td>673</td><td>148,014</td><td>129,694</td><td>60 s limit (21%)</td><td>60 s limit (17.8%)</td></tr>
 </table>
-<p class="muted">First six rows: default settings (400 city candidates), all proven optimal (gap 0), about 67 s
-for all six. The <code>radius18</code> cases (radius 18 around the player's start) sit at the 60 s limit. The full maps'
-own <code>config.toml</code> now keep all legal sites (<code>max_city_candidates = 1000</code>, also set on
-shuffle-revealed, which has only 38): continents stopped 0.016% from optimal (the best plan was found at 60.1 s; until
-then it was 10% off); shuffle found a single plan at 11.5 s, by rounding, and nothing better after it: 16.5% from the
-bound, with only 2.7 districts per city, so that case needs a longer time limit or a starting plan. (With food weighted 1, shuffle
-stopped at the 60 s limit 0.026% from optimal.) Each log ends with metrics (<code>metrics/</code>): districts and improvements per city, and per
-type the count, the share of cities that have one, and the mean adjacency or value. On continents: 3.9 districts per
-city (an Industrial Zone in every city, a Campus in 80%, an Aqueduct in 73%, a Harbor in 46%, a Commercial Hub in 45%);
-3.9 improvements per city, mostly Lumber Mills (in 95% of cities) and Mines (45%), then Quarries, Plantations and
-Farms (18%). Logs: <code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code>.
-A live game's revealed area is the size of the first rows: under a second.</p>
+<p class="muted">Default settings, each case with its own <code>config.toml</code> (the full maps and shuffle-revealed keep
+all legal sites, <code>max_city_candidates = 1000</code>), run on 2026-11-26. "Before the Colosseum" is the previous
+version (no Entertainment Complex, no amenities), run the same day on the same machine. Every plan has one
+Entertainment Complex and the Colosseum. The machine was slower that day than in earlier runs: the previous version
+ended continents and shuffle 8% and 18% from optimal at 60 s, against 0.07% and 0.33% the day before. The time-limited
+cases depend on when HiGHS's heuristics find a good plan, so their gaps vary between runs. Each log ends with
+metrics (<code>metrics/</code>): districts and improvements per city, and per type the count, the share of cities that
+have one, and the mean adjacency or value. On continents: 3.5 districts per city (an Industrial Zone in 95% of
+cities, an Aqueduct in 69%, a Campus in 58%, a Harbor in 56%, a Commercial Hub in 41%, one Entertainment Complex);
+3.3 improvements per city, mostly Lumber Mills (70% of cities) and Mines (50%); the Colosseum reaches 9 of the 86
+cities. Logs: <code>results/&lt;run&gt;/&lt;case&gt;/optimisation.log</code>.
+A live game's revealed area is the size of the first rows: a few seconds.</p>
 
 <h2 id="limits">15. Not modelled</h2>
 <ul>
@@ -552,15 +640,22 @@ A live game's revealed area is the size of the first rows: under a second.</p>
   <li><b>Timing</b>: the plan says where, not when: no settler schedule, build rate or border growth, and every
   placement counts as if built at once. An optional timed model (periods over a horizon) was tried and removed on
   2026-11-26, to be redone later (it is in the git history).</li>
-  <li><b>Site value is a proxy.</b> No housing (fresh water, coast), amenities, growth over time or future improvements;
+  <li><b>Site value is a proxy.</b> No housing (fresh water, coast), growth over time or future improvements;
   sites of cities 4 apart can count the same tile twice.</li>
   <li><b>Aqueduct and Dam housing</b>: their own value (housing, and the Dam's flood protection) is not counted; they
   are placed for the Industrial Zone bonus and the district bonus. The Aqueduct is also planned for cities already on
   fresh water.</li>
   <li><b>Rivers that meet</b> count as one river for the one-Dam rule.</li>
-  <li><b>Other districts</b>: Entertainment Complex (left out on purpose), Canal, Government Plaza,
-  Diplomatic Quarter, Spaceport, Aerodrome, Neighborhood, Preserve, Water Park; civilisation-unique districts; wonders;
-  improvements.</li>
+  <li><b>Other districts</b>: Canal, Government Plaza, Diplomatic Quarter, Spaceport, Aerodrome, Neighborhood,
+  Preserve, Water Park; civilisation-unique districts and improvements.</li>
+  <li><b>Other wonders</b>: only the Colosseum is planned. The rules read so far (terrains, features, adjacent district,
+  yields, amenities) cover it; other wonders also need rules not read yet (river, coast, mountain, …). A wonder with
+  one of those flags is never planned; others (e.g. Halicarnassus, which needs the coast) have rules elsewhere and
+  are not checked. Adjacency between a planned wonder and planned districts (Theater +2 per wonder, "+1 per 2
+  districts") is left out of the MIP, as for districts, and counted in \(S\).</li>
+  <li><b>Amenities</b> come only from districts and wonders, capped at \(\bar\alpha\) per city with a linear value
+  \(\gamma\): no luxuries, population, the Arena, Zoo or Stadium (buildings, not planned), the Water Park, or the
+  Colosseum's +2 loyalty. A wonder's amenities for its own city only (<code>RegionalRange</code> 0) are not counted.</li>
   <li><b>Technology- or civic-gated adjacency</b>, and civilisation or leader bonuses.</li>
   <li><b>Foreign districts</b> count in adjacency like the player's; the game's own rule is not checked yet.</li>
   <li><b>Fog</b>: only revealed tiles exist, so hidden cities or borders can be planned over.</li>

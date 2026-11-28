@@ -32,6 +32,12 @@ class Instance:
     ispots: dict[tuple[str, XY], list[XY]] = field(default_factory=dict)
     improvements_left: dict[XY, int] = field(default_factory=dict)
     ibonuses: list[tuple[str, str, str, float]] = field(default_factory=list)
+    # Wonders: W, the types to plan; (wonder, tile) -> who may build it there, as (city,
+    # tile of that city's district it must touch, or None if it needs none); amenities
+    # each city already gets from what is built.
+    wonders: tuple[str, ...] = ()
+    wspots: dict[tuple[str, XY], list[tuple[XY, XY | None]]] = field(default_factory=dict)
+    amenity_base: dict[XY, int] = field(default_factory=dict)
     # Variables, filled by the formulation's variable steps.
     x: dict[XY, Var] = field(default_factory=dict)                  # city c -> x[c]
     z: dict[tuple[str, XY, XY], Var] = field(default_factory=dict)  # (d, c, t) -> z[d,c,t]
@@ -45,6 +51,8 @@ class Instance:
     # on, a planned district of that type is on the tile (any city's).
     r: dict[tuple[str, XY], Var] = field(default_factory=dict)
     on: dict[tuple[str, XY], Var] = field(default_factory=dict)
+    k: dict[tuple[str, XY], Var] = field(default_factory=dict)      # (wonder, tile) -> k[b,t]
+    a: dict[XY, Var] = field(default_factory=dict)                  # city -> amenities counted
 
 
 Step = Callable[[Model, Instance], None]   # a variable, constraint or objective function

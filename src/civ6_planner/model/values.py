@@ -25,6 +25,12 @@ def covered_value(cfg: Config, tile: Tile) -> float:
     return cfg.loss_factor * cfg.weighted(tile)
 
 
+def wonder_value(rules: Rules, cfg: Config, wonder: str, tile: Tile) -> float:
+    """A wonder's own weighted yields (Colosseum: +2 culture), less the tile it covers;
+    its amenities are counted per city (amenity_value)."""
+    return cfg.weighted(rules.wonders[wonder].yields) - covered_value(cfg, tile)
+
+
 def regional_value(rules: Rules, cfg: Config, building: str) -> float:
     """Weighted yields a regional building gives each city it reaches."""
     return cfg.weighted(rules.regional[building].yields)

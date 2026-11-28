@@ -64,6 +64,9 @@ def covered_tile_term(m: Model, inst: Instance) -> None:
 
 
 def district_bonus_term(m: Model, inst: Instance) -> None:
-    """+ district_bonus z[d,c,t]: build the districts whenever possible."""
-    for v in inst.z.values():
-        m.add_obj(v, inst.cfg.district_bonus)
+    """+ district_bonus z[d,c,t]: build the districts whenever possible, except those in
+    no_bonus_districts (the Entertainment Complex: only where its amenities, or the
+    Colosseum next to it, pay for the slot)."""
+    for (d, c, t), v in inst.z.items():
+        if d not in inst.cfg.no_bonus_districts:
+            m.add_obj(v, inst.cfg.district_bonus)

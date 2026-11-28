@@ -62,6 +62,28 @@ def can_place_district(rules: Rules, gmap: GameMap, tile: Tile, district: str = 
     return rules.resource_class.get(tile["resource"]) not in LOCKED_RESOURCES
 
 
+def can_place_wonder(rules: Rules, gmap: GameMap, tile: Tile, wonder: str) -> bool:
+    """Can `wonder` go on `tile`, as far as the tile itself goes? (Next to its district
+    and within its city's range: in the model.)
+
+    - Open land, no city or district.
+    - A terrain from Building_ValidTerrains (the Colosseum: flat, no hills).
+    - No feature, a removable one (woods, rainforest, marsh: cleared), or one the wonder
+      lists (Building_ValidFeatures, e.g. floodplains for the Pyramids).
+    - Not on a luxury or strategic resource (as districts, engine rule).
+    A wonder with placement requirements not checked yet (WonderRule.requires) never goes.
+    """
+    rule = rules.wonders.get(wonder)
+    if rule is None or rule.requires or tile["is_city"] or tile["district"] != "NONE":
+        return False
+    if not open_land(tile, gmap.player) or (rule.terrains and tile["terrain"] not in rule.terrains):
+        return False
+    feature = tile["feature"]
+    if feature != "NONE" and feature not in rule.features and feature not in rules.removable_features:
+        return False
+    return rules.resource_class.get(tile["resource"]) not in LOCKED_RESOURCES
+
+
 def can_place_improvement(rules: Rules, gmap: GameMap, tile: Tile, improvement: str) -> bool:
     """Can `improvement` go on `tile`? A tile with a (visible) resource only takes that
     resource's improvements; otherwise a feature must be one the improvement allows,

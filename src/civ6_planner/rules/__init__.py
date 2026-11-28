@@ -7,10 +7,10 @@ behaviour rather than data are written out and marked as such.
     rules.py       the Rules object (the tables, and the questions the planner asks)
     tables.py      the tables' types and their defaults when the database can't be read
     database.py    reading the tables from the database
-    placement.py   where cities, districts and improvements may go
+    placement.py   where cities, districts, wonders and improvements may go
     adjacency.py   district adjacency bonuses
 """
 from .rules import Rules
-from .tables import AdjacencyRule, ImprovementRule, RegionalBuilding
+from .tables import AdjacencyRule, ImprovementRule, RegionalBuilding, WonderRule
 
-__all__ = ["AdjacencyRule", "ImprovementRule", "RegionalBuilding", "Rules"]
+__all__ = ["AdjacencyRule", "ImprovementRule", "RegionalBuilding", "Rules", "WonderRule"]

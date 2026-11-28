@@ -16,6 +16,8 @@ feature has its own file (variables, constraints and terms together):
     improvements.py       w[i,c,t]       (9) improvement_limit
     improvement_bonus.py  q[d,i,c,u]     (10) improvement_bonus_link
     regional.py           r[b,c], on[d,t] (11) regional_reach (off unless configured)
+    wonders.py            k[b,t]         (12) wonder_needs_district, (13) one_of_each_wonder
+    amenities.py          a[c]           (14) amenity_supply
 
 Not modelled on purpose: adjacency between planned districts other than a district's
 own city centre and the y/q bonuses (e.g. Campus next to a planned Holy Site, or
@@ -28,6 +30,7 @@ from typing import Any, Callable
 
 from ...solver import Model
 from ..instance import Instance, Step
+from .amenities import amenity_supply, amenity_term, amenity_vars
 from .cities import city_bonus_term, city_spacing, city_vars, max_cities, site_term
 from .district_rules import not_next_to_planned_city, one_dam_per_river
 from .districts import (adjacency_term, covered_tile_term, district_bonus_term, district_needs_city,
@@ -37,6 +40,7 @@ from .improvements import improvement_limit, improvement_term, improvement_vars
 from .neighbour_bonus import neighbour_bonus_link, neighbour_bonus_term, neighbour_bonus_vars
 from .regional import regional_reach, regional_term, regional_vars
 from .tiles import one_thing_per_tile
+from .wonders import one_of_each_wonder, wonder_needs_district, wonder_term, wonder_vars
 
 VARIABLES: list[Step] = [
     city_vars,
@@ -45,6 +49,8 @@ VARIABLES: list[Step] = [
     improvement_vars,
     improvement_bonus_vars,
     regional_vars,
+    wonder_vars,
+    amenity_vars,       # after the districts and wonders it counts
 ]
 CONSTRAINTS: list[Step] = [
     max_cities,
@@ -58,6 +64,9 @@ CONSTRAINTS: list[Step] = [
     improvement_limit,
     improvement_bonus_link,
     regional_reach,
+    wonder_needs_district,
+    one_of_each_wonder,
+    amenity_supply,
 ]
 OBJECTIVE: list[Step] = [
     site_term,
@@ -67,6 +76,8 @@ OBJECTIVE: list[Step] = [
     improvement_term,
     improvement_bonus_term,
     regional_term,
+    wonder_term,
+    amenity_term,
     city_bonus_term,
     district_bonus_term,
 ]

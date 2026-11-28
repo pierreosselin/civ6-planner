@@ -28,12 +28,17 @@ With the default settings (`config/default.toml`) the optimiser:
 - founds **as many new cities as fit** in the revealed area, more than 3 tiles from
   any city, on the best sites;
 - gives each city (new, and your existing ones) up to **3 specialty districts**
-  (Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor),
-  plus an **Aqueduct** and a **Dam** where the game allows them;
+  (Campus, Industrial Zone, Commercial Hub, Holy Site, Theater, Encampment, Harbor,
+  Entertainment Complex), plus an **Aqueduct** and a **Dam** where the game allows them;
+- places the **Colosseum** (a world wonder: +2 amenities to every city within 6 tiles)
+  next to one city's Entertainment Complex, where it reaches the most cities; an
+  Entertainment Complex is built only where its amenities pay for the slot, so
+  usually just that one;
 - gives each city up to **5 tile improvements** (Farm, Mine, Quarry, Plantation, Camp,
   Pasture, Fishing Boats, Lumber Mill), on the tiles worth working;
 - maximises the cities' site yields + the districts' adjacency bonuses + the improved
-  tiles − the yields of the tiles districts cover, with food, production
+  tiles + the amenities cities get (up to 2 each) − the yields of the tiles districts
+  cover, with food, production
   and science weighted most. Optionally (`objective.regional_buildings`), regional
   effects too: a Factory's +3 production to every city within 6 tiles of its Industrial Zone.
 
@@ -154,7 +159,8 @@ Found while getting data in and out of the game; worth knowing before changing t
 
 Timing (when each city and district comes), most adjacency between planned
 districts of different cities, technology- and civic-gated rules, tile ownership,
-other districts (Entertainment Complex, Government Plaza, Canal, ...), wonders. See
+other districts (Government Plaza, Canal, ...), wonders other than the Colosseum,
+amenities from luxuries and buildings. See
 the last section of [`docs/model.html`](docs/model.html).
 
 ## Licence

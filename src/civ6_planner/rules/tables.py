@@ -24,7 +24,16 @@ PLACEMENT_FLAGS = ("Coast", "AdjacentToLand", "NoAdjacentCity", "Aqueduct", "Req
 # Districts that count against the population limit (RequiresPopulation = 1), for when the
 # database can't be read.
 DEFAULT_SPECIALTY = ("DISTRICT_CAMPUS", "DISTRICT_INDUSTRIAL_ZONE", "DISTRICT_COMMERCIAL_HUB",
-                     "DISTRICT_HOLY_SITE", "DISTRICT_THEATER", "DISTRICT_ENCAMPMENT", "DISTRICT_HARBOR")
+                     "DISTRICT_HOLY_SITE", "DISTRICT_THEATER", "DISTRICT_ENCAMPMENT", "DISTRICT_HARBOR",
+                     "DISTRICT_ENTERTAINMENT_COMPLEX")
+
+# Amenities a district gives its own city (Districts.Entertainment), for when the database
+# can't be read.
+DEFAULT_ENTERTAINMENT = {"DISTRICT_ENTERTAINMENT_COMPLEX": 1, "DISTRICT_DAM": 1}
+
+# Features a wonder removes when placed (Features.Removable), for when the database can't
+# be read; it may go on other features only if it lists them (Building_ValidFeatures).
+DEFAULT_REMOVABLE_FEATURES = ("FEATURE_FOREST", "FEATURE_JUNGLE", "FEATURE_MARSH")
 
 # Dam-like districts, an engine rule not in the database: on a tile with a river along at
 # least two of its edges, and one per river (the floodplains requirement is in the
@@ -96,4 +105,27 @@ class RegionalBuilding:
 # As in the Gathering Storm database, for when it can't be read.
 DEFAULT_REGIONAL: dict[str, RegionalBuilding] = {
     "BUILDING_FACTORY": RegionalBuilding("DISTRICT_INDUSTRIAL_ZONE", 6, {"YIELD_PRODUCTION": 3}),
+}
+
+
+@dataclass
+class WonderRule:
+    """Where a world wonder may go and what it gives, from the Buildings table and its
+    Building_* tables. One per world (every wonder in the database is)."""
+    terrains: set[str] = field(default_factory=set)        # Building_ValidTerrains (empty: any)
+    features: set[str] = field(default_factory=set)        # Building_ValidFeatures (on top of removable ones)
+    adjacent_district: str | None = None                   # Buildings.AdjacentDistrict: next to one of its city's
+    yields: dict[str, int] = field(default_factory=dict)   # Building_YieldChanges
+    entertainment: int = 0                                 # amenities, to every city within `range`
+    range: int = 0                                         # Buildings.RegionalRange (0: its own city only)
+    # Placement requirements not checked yet (RequiresRiver, Coast, AdjacentToMountain,
+    # Building_RequiredFeatures, ...): a wonder with any is never planned.
+    requires: tuple[str, ...] = ()
+
+
+# As in the Gathering Storm database, for when it can't be read.
+DEFAULT_WONDERS: dict[str, WonderRule] = {
+    "BUILDING_COLOSSEUM": WonderRule(
+        {f"TERRAIN_{t}" for t in ("DESERT", "GRASS", "PLAINS", "SNOW", "TUNDRA")}, set(),
+        "DISTRICT_ENTERTAINMENT_COMPLEX", {"YIELD_CULTURE": 2}, entertainment=2, range=6),
 }

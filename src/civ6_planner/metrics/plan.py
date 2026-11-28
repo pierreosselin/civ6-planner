@@ -1,6 +1,6 @@
 """Statistics of a plan, for the logs: how many districts each city gets, how often each
-district type is planned, what adjacency the planned districts get, how the cities are
-spaced.
+district type is planned, what adjacency the planned districts get, the wonders and the
+amenities cities get, how the cities are spaced.
 
 Adjacency here is what the game would give with the whole plan built (every planned
 city and district counted, as on the tacks), not the MIP's own coefficient.
@@ -78,7 +78,21 @@ def plan_metrics(gmap: GameMap, rules: Rules, plan: Plan) -> dict[str, Any]:
         "improvements_by_type": itypes,
         "spacing": city_spacing(gmap, plan, cities),
         "regional": regional(gmap, rules, plan, len(cities)),
+        "wonders": [{"wonder": b, "tile": xy, "city": c} for b, xy, c in plan.wonders],
+        "amenities": amenities(gmap, rules, plan),
     }
+
+
+def amenities(gmap: GameMap, rules: Rules, plan: Plan) -> dict[str, Any]:
+    """How many cities get how many amenities from districts and wonders (planned or
+    built), and how many reach amenities_needed."""
+    per_city = model.city_amenities(gmap, rules, plan)
+    histogram: dict[int, int] = {}
+    for n in per_city.values():
+        histogram[n] = histogram.get(n, 0) + 1
+    need = plan.config.amenities_needed
+    return {"needed": need, "cities_with_enough": sum(1 for n in per_city.values() if n >= need),
+            "histogram": dict(sorted(histogram.items()))}
 
 
 def regional(gmap: GameMap, rules: Rules, plan: Plan, n_cities: int) -> dict[str, Any]:

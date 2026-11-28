@@ -105,6 +105,7 @@ def run(out_dir: str, scenarios: list[str] | None = None, seed: int = 1, rules: 
         if parts:
             say(f"  score {score:.1f} = site {parts['site']:.1f} + adjacency {parts['adjacency']:.1f}"
                 f" + improvements {parts['improvements']:.1f} + regional {parts['regional']:.1f}"
+                f" + wonders {parts['wonders']:.1f} + amenities {parts['amenities']:.1f}"
                 f" - covered tiles {parts['lost']:.1f}")
         for line in metrics.format_summary(stats):
             say(line)
@@ -135,7 +136,8 @@ def summary_lines(summary: dict[str, Any], out_dir: str) -> list[str]:
         for t in r["tacks"]:
             icon = t["icon"].removeprefix("ICON_")
             kind = ("City" if t["icon"] == planner.CITY_ICON else
-                    planner.improvement_name(icon) if icon.startswith("IMPROVEMENT_") else planner.district_name(icon))
+                    planner.improvement_name(icon) if icon.startswith("IMPROVEMENT_") else
+                    planner.wonder_name(icon) if icon.startswith("BUILDING_") else planner.district_name(icon))
             counts[kind] = counts.get(kind, 0) + 1
         placed = ", ".join(f"{n} {name}" for name, n in counts.items()) or "nothing"
         solver = r["solver"]

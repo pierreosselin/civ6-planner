@@ -28,6 +28,8 @@ class Config:
     max_city_candidates: int
     max_specialty_districts: int   # per city, districts that need population (RequiresPopulation)
     improvements: tuple[str, ...]  # improvement types to plan
+    wonders: tuple[str, ...]       # world wonders to plan, e.g. BUILDING_COLOSSEUM
+    wonder_candidates: int         # per wonder, best tiles kept as variables
     max_improvements: int          # per city
     improvement_candidates: int    # per city, best (improvement, tile) options kept as variables
     worked_tile_factor: float      # share of an improved tile's own yields counted (it is worked)
@@ -35,6 +37,9 @@ class Config:
     loss_factor: float
     city_bonus: float
     district_bonus: float
+    no_bonus_districts: tuple[str, ...]  # districts that don't get district_bonus
+    amenity_value: float           # value of one amenity a city needs
+    amenities_needed: int          # per city, amenities from districts and wonders that count
     weights: dict[str, float]      # YIELD_* -> value of one unit
     regional_buildings: tuple[str, ...]  # buildings whose yields reach cities within their range
     solver: dict[str, Any]         # scipy.optimize.milp options
@@ -70,10 +75,13 @@ def load(*paths: str | None) -> Config:
         max_city_candidates=p["max_city_candidates"],
         max_specialty_districts=p["max_specialty_districts"],
         improvements=tuple(p["improvements"]), max_improvements=p["max_improvements"],
+        wonders=tuple(p["wonders"]), wonder_candidates=p["wonder_candidates"],
         improvement_candidates=p["improvement_candidates"],
         worked_tile_factor=o["worked_tile_factor"],
         site_radius=o["site_radius"], loss_factor=o["loss_factor"],
         city_bonus=o["city_bonus"], district_bonus=o["district_bonus"],
+        no_bonus_districts=tuple(o["no_bonus_districts"]),
+        amenity_value=float(o["amenity_value"]), amenities_needed=int(o["amenities_needed"]),
         weights={"YIELD_" + k.upper(): float(v) for k, v in o["weights"].items()},
         regional_buildings=tuple(o["regional_buildings"]),
         solver=dict(raw["solver"]), sources=files, raw=raw)

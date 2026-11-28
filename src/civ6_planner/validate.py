@@ -3,7 +3,7 @@
 The model guarantees range, one thing per tile and city spacing; the checks below
 confirm that, and measure what it does not model:
 
-- ring: a district or improvement of city c on a tile next to another city's centre.
+- ring: a district, wonder or improvement of city c on a tile next to another city's centre.
   A city claims the unowned tiles around its centre when it is founded, so that tile
   would most likely belong to the other city (unless c owned it first: founding order).
 - owned: a tile already owned by one of the player's cities, used by another city
@@ -27,7 +27,8 @@ def check_plan(gmap: GameMap, rules: Rules, plan: Plan) -> dict[str, Any]:
     own = {(c["x"], c["y"]): c for c in gmap.own_cities if (c["x"], c["y"]) in gmap.tiles}
     own_id = {c["id"]: xy for xy, c in own.items()}
     centres = set(plan.cities) | gmap.city_positions()
-    items = [(d, t, c) for d, t, c in plan.districts] + [(i, t, c) for i, t, c in plan.improvements]
+    items = [(d, t, c) for d, t, c in plan.districts] + [(i, t, c) for i, t, c in plan.improvements] \
+        + [(b, t, c) for b, t, c in plan.wonders]
     label = {xy: f"C{n}" for n, xy in enumerate(plan.cities, 1)}
     label.update({xy: str(c.get("name")) for xy, c in own.items()})
 

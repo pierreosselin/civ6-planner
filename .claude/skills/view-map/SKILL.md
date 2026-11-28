@@ -18,7 +18,7 @@ hexes. What a tile shows:
   badges with a white border (e.g. the Campus's science adjacency, from `Tack.yields`).
 - blue edges = rivers.
 - tacks: badge only, no text (**C** city, **S** campus, **P** industrial zone, **G** commercial
-  hub, **F** holy site, **T** theater, **E** encampment, **H** harbor, **A** aqueduct, **D** dam; improvements in lowercase: **f** farm, **m** mine,
+  hub, **F** holy site, **T** theater, **E** encampment, **H** harbor, **A** aqueduct, **D** dam, **N** entertainment complex, **W** Colosseum (wonder); improvements in lowercase: **f** farm, **m** mine,
   **q** quarry, **p** plantation, **c** camp, **s** pasture, **b** fishing boats, **l** lumber mill)
   plus a thick hex
   outline in the tack's colour (hover a tack for its name). The side panel holds

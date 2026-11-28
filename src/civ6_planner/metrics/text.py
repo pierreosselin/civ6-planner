@@ -35,6 +35,12 @@ def format_summary(m: dict[str, Any]) -> list[str]:
         lines.append(f"  regional: {b.removeprefix('BUILDING_').replace('_', ' ').title()} reaches "
                      f"{r['cities_reached']} cities ({r['share_of_cities']:.0%}) from {r['districts']} "
                      f"{'district' if r['districts'] == 1 else 'districts'}")
+    for w in m.get("wonders", []):
+        lines.append(f"  wonder: {w['wonder'].removeprefix('BUILDING_').replace('_', ' ').title()} at {w['tile']}")
+    a = m.get("amenities")
+    if a:
+        lines.append(f"  amenities from districts and wonders: {a['cities_with_enough']} of {m['cities']} cities "
+                     f"get the {a['needed']} needed · cities per amenity count {a['histogram']}")
     s = m.get("spacing", {})
     if s.get("nearest_city"):
         nc, ap = s["nearest_city"], s["all_pairs"]

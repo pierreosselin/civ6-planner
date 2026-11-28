@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 def adjacency(rules: Rules, gmap: GameMap, tile: Tile, district: str,
               planned: dict[XY, str] | None = None, improved: dict[XY, str] | None = None) -> dict[str, int]:
     """{yield: bonus} the district would get on `tile`. planned: {(x, y): district type}
-    of districts the plan adds (a planned city counts as DISTRICT_CITY_CENTER);
+    of districts the plan adds (a planned city counts as DISTRICT_CITY_CENTER, a planned
+    wonder as DISTRICT_WONDER);
     improved: {(x, y): improvement type} the plan adds."""
     planned = planned or {}
     improved = improved or {}
@@ -60,7 +61,8 @@ def _matches(rules: Rules, tile: Tile, neighbours: list[Tile], rule: AdjacencyRu
     if rule.get("sea_resource"):
         return sum(1 for n in neighbours if n["water"] and n.get("resource", "NONE") != "NONE")
     if rule.get("wonder"):
-        return sum(1 for n in neighbours if n.get("wonder", "NONE") != "NONE")
+        return sum(1 for n in neighbours
+                   if n.get("wonder", "NONE") != "NONE" or planned.get((n["x"], n["y"])) == "DISTRICT_WONDER")
     if rule.get("natural_wonder"):
         return sum(1 for n in neighbours if n.get("natural_wonder"))
     if rule.get("river"):

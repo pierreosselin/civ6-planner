@@ -13,7 +13,18 @@ districts = [                      # districts per city (game type names)
     "DISTRICT_HARBOR",             # coast tiles only; cities without one simply get none
     "DISTRICT_AQUEDUCT",           # next to the city centre and fresh water (river, lake, mountain, oasis)
     "DISTRICT_DAM",                # floodplains with a river on 2+ edges; one per river
+    "DISTRICT_ENTERTAINMENT_COMPLEX",  # +1 amenity; no adjacency: worth only its amenities and the
+                                   # wonders it allows (the Colosseum), so most cities get none
 ]
+wonders = [                        # world wonders to plan (game type names); one each, at most
+    "BUILDING_COLOSSEUM",          # flat land next to an Entertainment Complex; +2 amenities to every
+]                                  # city within 6 tiles. Only the Colosseum is checked against the
+                                   # game: other wonders' placement rules aren't all read yet
+wonder_candidates = 1              # per wonder, only the tiles with the most city sites within its range
+                                   # are considered: with all of them (481 on continents) HiGHS couldn't
+                                   # solve the first LP in 60 s, and with 10 the time-limited maps ended
+                                   # 20-30% from optimal; small maps can afford more (10: +8 on
+                                   # continents-revealed)
 max_city_candidates = 400          # keep only the best city sites by site value
 max_specialty_districts = 3        # per city: districts with RequiresPopulation (all planned ones
                                    # but Aqueduct and Dam); the game allows 1 + (population - 1) // 3
@@ -36,6 +47,12 @@ site_radius = 2                    # tiles counted in a city's site value
 loss_factor = 0.5                  # share of a covered tile's yields counted as lost
 city_bonus = 100.0                 # per city: found the cities whenever possible
 district_bonus = 10.0              # per district: build them whenever possible
+no_bonus_districts = [             # districts without district_bonus: built only where what they give
+    "DISTRICT_ENTERTAINMENT_COMPLEX",  # (amenities, a wonder next to it) pays for the slot
+]
+amenity_value = 4.0                # value of one amenity a city needs, in weighted yields (placeholder)
+amenities_needed = 2               # per city: amenities from districts and wonders that count (luxuries
+                                   # cover the rest; more are worth nothing)
 worked_tile_factor = 1.0           # an improved tile is worked: its own yields count this much on
                                    # top of the improvement's gain (0: only the gain counts)
 regional_buildings = []            # buildings whose yields reach every one of your city centres within
